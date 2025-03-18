@@ -1,5 +1,3 @@
-# Crea el archivo .gitignore
-cat > .gitignore << 'EOL'
 # Archivos y directorios de Node.js
 node_modules/
 npm-debug.log
