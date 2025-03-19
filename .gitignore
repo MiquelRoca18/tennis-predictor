@@ -33,6 +33,8 @@ ENV/
 *.pkl
 model/
 logs/
+data/
+evaluation_results/
 *.log
 evaluation_results/
 model_evaluation/
