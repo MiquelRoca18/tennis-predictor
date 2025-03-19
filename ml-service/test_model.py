@@ -18,7 +18,8 @@ from sklearn.model_selection import cross_val_score, KFold, StratifiedKFold
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     roc_curve, roc_auc_score, confusion_matrix,
-    classification_report, precision_recall_curve, average_precision_score
+    classification_report, precision_recall_curve, average_precision_score,
+    auc
 )
 
 # Importar utilidades
@@ -41,7 +42,11 @@ except ImportError:
 # Configurar logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s: %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('ml-service/logs/test_model.log'),
+        logging.StreamHandler()
+    ]
 )
 
 def load_model(model_path=None):
@@ -193,184 +198,41 @@ def cross_validate_model(model, X, y, n_folds=5):
         'f1_std': f1.std()
     }
 
-def evaluate_model(model, X_test, y_test, output_dir='evaluation_results'):
+def evaluate_model(model, X_test, y_test):
     """
-    Evalúa el modelo con datos de prueba y genera visualizaciones.
+    Evalúa el modelo en el conjunto de prueba.
     
     Args:
-        model: Modelo a evaluar
+        model: Modelo entrenado
         X_test: Características de prueba
         y_test: Etiquetas de prueba
-        output_dir: Directorio para guardar resultados
         
     Returns:
-        Diccionario con métricas
+        dict: Métricas de evaluación
     """
-    print("\n=== EVALUACIÓN DEL MODELO ===")
-    
-    # Crear directorio de salida
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Realizar predicciones
-    y_pred = model.predict(X_test)
-    y_proba = model.predict_proba(X_test)
-    
-    # Métricas básicas
-    accuracy = accuracy_score(y_test, y_pred)
-    precision = precision_score(y_test, y_pred, average='weighted')
-    recall = recall_score(y_test, y_pred, average='weighted')
-    f1 = f1_score(y_test, y_pred, average='weighted')
-    
-    print(f"Accuracy:  {accuracy:.4f}")
-    print(f"Precision: {precision:.4f}")
-    print(f"Recall:    {recall:.4f}")
-    print(f"F1 Score:  {f1:.4f}")
-    
-    # Matriz de confusión
-    cm = confusion_matrix(y_test, y_pred)
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-               xticklabels=['Jugador 1', 'Jugador 2'],
-               yticklabels=['Jugador 1', 'Jugador 2'])
-    plt.xlabel('Predicción')
-    plt.ylabel('Valor Real')
-    plt.title('Matriz de Confusión')
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'confusion_matrix.png'))
-    plt.close()
-    
-    # Reporte de clasificación detallado
-    class_report = classification_report(y_test, y_pred, target_names=['Jugador 1', 'Jugador 2'])
-    print("\nReporte de Clasificación:")
-    print(class_report)
-    
-    # Guardar reporte en archivo
-    with open(os.path.join(output_dir, 'classification_report.txt'), 'w') as f:
-        f.write("REPORTE DE CLASIFICACIÓN\n")
-        f.write("=======================\n\n")
-        f.write(class_report)
-    
-    # Curva ROC
     try:
-        # Calcular AUC
-        auc = roc_auc_score(y_test, y_proba[:, 1])
+        # Realizar predicciones
+        y_pred = model.predict(X_test)
+        y_pred_proba = model.predict_proba(X_test)[:, 1]
         
-        # Calcular curva ROC
-        fpr, tpr, _ = roc_curve(y_test, y_proba[:, 1])
+        # Calcular métricas
+        metrics = {
+            'accuracy': accuracy_score(y_test, y_pred),
+            'precision': precision_score(y_test, y_pred),
+            'recall': recall_score(y_test, y_pred),
+            'f1': f1_score(y_test, y_pred),
+            'auc': auc(y_test, y_pred_proba)
+        }
         
-        plt.figure(figsize=(8, 6))
-        plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {auc:.2f})')
-        plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-        plt.xlim([0.0, 1.0])
-        plt.ylim([0.0, 1.05])
-        plt.xlabel('False Positive Rate')
-        plt.ylabel('True Positive Rate')
-        plt.title('Receiver Operating Characteristic (ROC)')
-        plt.legend(loc="lower right")
-        plt.savefig(os.path.join(output_dir, 'roc_curve.png'))
-        plt.close()
+        # Calcular matriz de confusión
+        cm = confusion_matrix(y_test, y_pred)
+        metrics['confusion_matrix'] = cm.tolist()
         
-        print(f"AUC-ROC:   {auc:.4f}")
+        return metrics
+        
     except Exception as e:
-        logging.error(f"Error generando curva ROC: {e}")
-    
-    # Curva Precision-Recall
-    try:
-        # Calcular average precision
-        ap = average_precision_score(y_test, y_proba[:, 1])
-        
-        # Calcular curva precision-recall
-        precision_curve, recall_curve, _ = precision_recall_curve(y_test, y_proba[:, 1])
-        
-        plt.figure(figsize=(8, 6))
-        plt.plot(recall_curve, precision_curve, color='green', lw=2, label=f'Precision-Recall curve (AP = {ap:.2f})')
-        plt.xlabel('Recall')
-        plt.ylabel('Precision')
-        plt.title('Precision-Recall Curve')
-        plt.legend(loc="lower left")
-        plt.savefig(os.path.join(output_dir, 'precision_recall_curve.png'))
-        plt.close()
-        
-        print(f"Average Precision: {ap:.4f}")
-    except Exception as e:
-        logging.error(f"Error generando curva Precision-Recall: {e}")
-    
-    # Análisis de errores
-    try:
-        # Crear DataFrame con resultados
-        results_df = pd.DataFrame({
-            'y_true': y_test,
-            'y_pred': y_pred,
-            'prob_player1': y_proba[:, 0],
-            'prob_player2': y_proba[:, 1]
-        })
-        
-        # Añadir indicador de predicción correcta
-        results_df['correct'] = results_df['y_true'] == results_df['y_pred']
-        
-        # Añadir confianza de predicción
-        results_df['confidence'] = results_df.apply(
-            lambda row: row['prob_player1'] if row['y_pred'] == 0 else row['prob_player2'], 
-            axis=1
-        )
-        
-        # Guardar resultados detallados
-        results_df.to_csv(os.path.join(output_dir, 'prediction_details.csv'), index=False)
-        
-        # Analizar errores por confianza
-        plt.figure(figsize=(10, 6))
-        sns.histplot(data=results_df, x='confidence', hue='correct', bins=20,
-                    element="step", common_norm=False, alpha=0.5)
-        plt.title('Distribución de Confianza vs. Predicción Correcta')
-        plt.xlabel('Confianza de la Predicción')
-        plt.ylabel('Frecuencia')
-        plt.savefig(os.path.join(output_dir, 'confidence_errors.png'))
-        plt.close()
-        
-        # Calcular errores por nivel de confianza
-        confidence_bins = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-        error_rates = []
-        
-        for i in range(len(confidence_bins) - 1):
-            lower = confidence_bins[i]
-            upper = confidence_bins[i+1]
-            
-            bin_data = results_df[(results_df['confidence'] >= lower) & (results_df['confidence'] < upper)]
-            if len(bin_data) > 0:
-                error_rate = 1 - bin_data['correct'].mean()
-                error_rates.append({
-                    'bin': f"{lower:.1f} - {upper:.1f}",
-                    'error_rate': error_rate,
-                    'count': len(bin_data)
-                })
-        
-        error_df = pd.DataFrame(error_rates)
-        if not error_df.empty:
-            plt.figure(figsize=(10, 6))
-            sns.barplot(data=error_df, x='bin', y='error_rate')
-            plt.title('Tasa de Error por Nivel de Confianza')
-            plt.xlabel('Confianza de la Predicción')
-            plt.ylabel('Tasa de Error')
-            plt.savefig(os.path.join(output_dir, 'error_by_confidence.png'))
-            plt.close()
-            
-            # Mostrar tabla de errores por confianza
-            print("\nTasas de Error por Nivel de Confianza:")
-            for _, row in error_df.iterrows():
-                print(f"  Confianza {row['bin']}: {row['error_rate']:.4f} (n={row['count']})")
-    except Exception as e:
-        logging.error(f"Error en análisis de errores: {e}")
-    
-    print(f"\nResultados de evaluación guardados en: {os.path.abspath(output_dir)}")
-    
-    return {
-        'accuracy': accuracy,
-        'precision': precision,
-        'recall': recall,
-        'f1': f1,
-        'auc': auc if 'auc' in locals() else None,
-        'ap': ap if 'ap' in locals() else None
-    }
+        logging.error(f"Error evaluando modelo: {e}")
+        return None
 
 def analyze_model(model, X):
     """
@@ -551,69 +413,113 @@ def predict_matches(model, test_matches, output_file='predictions.csv'):
         print("No se pudieron generar predicciones.")
         return None
 
-def main():
-    parser = argparse.ArgumentParser(description="Evaluación avanzada de modelo de predicción de tenis")
-    parser.add_argument('--model', type=str, help='Ruta al archivo del modelo')
-    parser.add_argument('--data', type=str, default='tennis_matches.csv', help='Ruta al archivo de datos')
-    parser.add_argument('--test-size', type=float, default=0.2, help='Proporción para datos de prueba')
-    parser.add_argument('--external', type=str, help='Ruta a datos de prueba externos')
-    parser.add_argument('--cv', action='store_true', help='Realizar validación cruzada')
-    parser.add_argument('--folds', type=int, default=5, help='Número de folds para validación cruzada')
-    parser.add_argument('--analyze', action='store_true', help='Realizar análisis detallado del modelo')
-    parser.add_argument('--predict', type=str, help='Archivo CSV con partidos para predecir')
-    parser.add_argument('--output-dir', type=str, default='model_evaluation', help='Directorio para resultados')
+def plot_roc_curve(y_test, y_pred_proba, output_dir='ml-service/plots'):
+    """
+    Genera y guarda la curva ROC.
     
-    args = parser.parse_args()
+    Args:
+        y_test: Etiquetas de prueba
+        y_pred_proba: Probabilidades predichas
+        output_dir: Directorio para guardar la gráfica
+    """
+    try:
+        fpr, tpr, _ = roc_curve(y_test, y_pred_proba)
+        roc_auc = auc(fpr, tpr)
+        
+        plt.figure(figsize=(10, 6))
+        plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {roc_auc:.2f})')
+        plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('Receiver Operating Characteristic (ROC) Curve')
+        plt.legend(loc="lower right")
+        
+        os.makedirs(output_dir, exist_ok=True)
+        plt.savefig(os.path.join(output_dir, 'roc_curve.png'))
+        plt.close()
+        
+    except Exception as e:
+        logging.error(f"Error generando curva ROC: {e}")
+
+def plot_confusion_matrix(cm, output_dir='ml-service/plots'):
+    """
+    Genera y guarda la matriz de confusión.
     
-    # Crear directorio de salida
-    os.makedirs(args.output_dir, exist_ok=True)
+    Args:
+        cm: Matriz de confusión
+        output_dir: Directorio para guardar la gráfica
+    """
+    try:
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+        plt.title('Confusion Matrix')
+        plt.ylabel('True Label')
+        plt.xlabel('Predicted Label')
+        
+        os.makedirs(output_dir, exist_ok=True)
+        plt.savefig(os.path.join(output_dir, 'confusion_matrix.png'))
+        plt.close()
+        
+    except Exception as e:
+        logging.error(f"Error generando matriz de confusión: {e}")
+
+def test_model(model_path, test_data_path, output_dir='ml-service/results'):
+    """
+    Prueba el modelo con datos de prueba.
     
+    Args:
+        model_path: Ruta al modelo guardado
+        test_data_path: Ruta a los datos de prueba
+        output_dir: Directorio para guardar resultados
+    """
     try:
         # Cargar modelo
-        model = load_model(args.model)
+        model = joblib.load(model_path)
+        logging.info(f"Modelo cargado desde {model_path}")
         
-        # Si se solicita análisis del modelo
-        if args.analyze:
-            # Necesitamos los datos para el análisis de características
-            fe = TennisFeatureEngineering(data_path=args.data)
-            X, _ = fe.prepare_training_data()
-            analyze_model(model, X)
+        # Cargar datos de prueba
+        test_data = pd.read_csv(test_data_path)
+        logging.info(f"Datos de prueba cargados desde {test_data_path}")
         
-        # Si se solicita validación cruzada
-        if args.cv:
-            fe = TennisFeatureEngineering(data_path=args.data)
-            X, y = fe.prepare_training_data()
-            cross_validate_model(model, X, y, n_folds=args.folds)
+        # Preparar características
+        feature_engineering = TennisFeatureEngineering()
+        X_test = feature_engineering.extract_features(test_data)
+        y_test = test_data['winner']
         
-        # Si se solicita evaluación con datos externos
-        if args.external:
-            X_external, y_external = load_external_test_data(args.external)
+        # Evaluar modelo
+        metrics = evaluate_model(model, X_test, y_test)
+        if metrics:
+            logging.info("Métricas de evaluación:")
+            for metric, value in metrics.items():
+                if metric != 'confusion_matrix':
+                    logging.info(f"{metric}: {value:.4f}")
             
-            if y_external is not None:
-                print("\n=== EVALUACIÓN CON DATOS EXTERNOS ===")
-                external_results = evaluate_model(model, X_external, y_external, 
-                                                output_dir=os.path.join(args.output_dir, 'external'))
-        
-        # Si no se piden datos externos, usar datos regulares divididos
-        elif not args.predict:  # Solo si no estamos en modo predicción
-            X_test, y_test = load_test_data(args.data, test_size=args.test_size)
-            evaluate_model(model, X_test, y_test, output_dir=args.output_dir)
-        
-        # Si se solicita predicción de partidos específicos
-        if args.predict:
-            if os.path.exists(args.predict):
-                # Cargar partidos a predecir
-                test_matches_df = pd.read_csv(args.predict)
-                test_matches = test_matches_df.to_dict('records')
-                
-                output_file = os.path.join(args.output_dir, 'match_predictions.csv')
-                predict_matches(model, test_matches, output_file)
-            else:
-                print(f"Error: No se encontró el archivo de partidos: {args.predict}")
-    
+            # Generar visualizaciones
+            y_pred_proba = model.predict_proba(X_test)[:, 1]
+            plot_roc_curve(y_test, y_pred_proba)
+            plot_confusion_matrix(np.array(metrics['confusion_matrix']))
+            
+            # Guardar resultados
+            os.makedirs(output_dir, exist_ok=True)
+            results_file = os.path.join(output_dir, 'test_results.json')
+            with open(results_file, 'w') as f:
+                json.dump(metrics, f, indent=4)
+            logging.info(f"Resultados guardados en {results_file}")
+            
     except Exception as e:
-        logging.error(f"Error en la evaluación del modelo: {e}")
-        print(f"Error: {e}")
+        logging.error(f"Error en prueba del modelo: {e}")
 
-if __name__ == "__main__":
+def main():
+    """Función principal para ejecutar pruebas del modelo"""
+    parser = argparse.ArgumentParser(description='Prueba el modelo de predicción de tenis')
+    parser.add_argument('--model', required=True, help='Ruta al modelo guardado')
+    parser.add_argument('--test_data', required=True, help='Ruta a los datos de prueba')
+    parser.add_argument('--output_dir', default='ml-service/results', help='Directorio para guardar resultados')
+    
+    args = parser.parse_args()
+    test_model(args.model, args.test_data, args.output_dir)
+
+if __name__ == '__main__':
     main()

@@ -1,479 +1,109 @@
 #!/usr/bin/env python3
 """
-Script para probar el sistema mejorado de predicción de partidos de tenis.
-Realiza pruebas completas verificando que todos los componentes funcionan sin usar valores por defecto.
+Script para probar el sistema de predicción de tenis.
 """
 
-import os
-import sys
-import time
-import logging
 import pandas as pd
 import numpy as np
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 import joblib
-import traceback
+import logging
+import os
+from datetime import datetime
 from utils import TennisFeatureEngineering
-from train import train_model
 
 # Configurar logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('ml-service/logs/test_system.log'),
+        logging.StreamHandler()
+    ]
+)
 
-# Obtener la ruta absoluta del directorio del proyecto
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-DATA_PATH = os.path.join(PROJECT_ROOT, 'tennis_matches.csv')
-
-def setup_test_data():
-    """Verifica que existan datos de prueba y los genera si faltan."""
-    print("Verificando datos de prueba...")
+def test_system(model_path: str, test_data_path: str, output_dir: str = 'ml-service/results'):
+    """
+    Prueba el sistema de predicción con datos de prueba.
     
-    if not os.path.exists(DATA_PATH):
-        print(f"No se encontró el archivo de datos: {DATA_PATH}")
-        print("Generando datos de prueba...")
+    Args:
+        model_path: Ruta al modelo entrenado
+        test_data_path: Ruta a los datos de prueba
+        output_dir: Directorio para guardar resultados
         
-        from data_collector import TennisDataCollector
-        collector = TennisDataCollector(output_path=DATA_PATH)
-        data = collector._generate_test_data(n_samples=500)
-        
-        print(f"Datos de prueba generados: {len(data)} partidos")
-        return data
-    else:
-        print(f"Usando datos existentes: {DATA_PATH}")
-        return pd.read_csv(DATA_PATH)
-
-def test_feature_engineering():
-    """Prueba el módulo de ingeniería de características."""
-    print("\n=== Prueba de ingeniería de características ===")
-    logging.info("Probando módulo de ingeniería de características...")
-    
-    # Asegurar que existen los datos
-    data = setup_test_data()
-    
+    Returns:
+        Diccionario con métricas de rendimiento
+    """
     try:
-        # Crear instancia
-        fe = TennisFeatureEngineering(data_path=DATA_PATH)
+        # Crear directorio de resultados si no existe
+        os.makedirs(output_dir, exist_ok=True)
         
-        # Probar preprocesamiento
-        print("- Preprocesando datos...")
-        df = fe.preprocess_data()
-        logging.info(f"Preprocesamiento exitoso: {len(df)} partidos")
-        
-        # Probar estadísticas de jugadores
-        print("- Calculando estadísticas de jugadores...")
-        player_stats = fe.build_player_statistics()
-        num_players = len(player_stats)
-        logging.info(f"Estadísticas calculadas para {num_players} jugadores")
-        print(f"  Se calcularon estadísticas para {num_players} jugadores")
-        
-        # Probar estadísticas head-to-head
-        print("- Calculando estadísticas head-to-head...")
-        h2h_stats = fe.build_head_to_head_statistics()
-        num_pairs = len(h2h_stats)
-        logging.info(f"Estadísticas h2h calculadas para {num_pairs} pares de jugadores")
-        print(f"  Se calcularon estadísticas H2H para {num_pairs} pares de jugadores")
-        
-        # Probar extracción de características
-        print("- Extrayendo características para un partido de ejemplo...")
-        # Seleccionar dos jugadores al azar de nuestros datos
-        player1 = data['player1'].iloc[0]
-        player2 = data['player2'].iloc[0]
-        
-        match_data = {
-            'player1': player1,
-            'player2': player2,
-            'ranking_1': 2,
-            'ranking_2': 3,
-            'surface': 'clay'
-        }
-        
-        features = fe.extract_features(match_data)
-        num_features = len(features)
-        logging.info(f"Extracción de características exitosa: {num_features} características")
-        print(f"  Se extrajeron {num_features} características")
-        
-        # Probar preparación de datos para entrenamiento
-        print("- Preparando datos para entrenamiento...")
-        X, y = fe.prepare_training_data()
-        logging.info(f"Preparación de datos exitosa: {X.shape[0]} muestras, {X.shape[1]} características")
-        print(f"  Datos preparados: {X.shape[0]} muestras, {X.shape[1]} características")
-        
-        # Verificar valores por defecto en las características
-        print("- Verificando que no haya valores por defecto...")
-        null_counts = X.isnull().sum()
-        total_nulls = null_counts.sum()
-        
-        if total_nulls > 0:
-            print(f"  ⚠️ Se encontraron {total_nulls} valores nulos en las características:")
-            for col, count in null_counts[null_counts > 0].items():
-                print(f"    - {col}: {count} valores nulos")
-        else:
-            print("  ✅ No se encontraron valores nulos en las características")
-        
-        # Test adicional: verificar distribución de características para detectar valores por defecto
-        # Valores repetidos muy frecuentes pueden indicar valores por defecto
-        for col in X.columns:
-            value_counts = X[col].value_counts()
-            if value_counts.iloc[0] > len(X) * 0.9:  # Si más del 90% son iguales
-                print(f"  ⚠️ Posible valor por defecto en {col}: {value_counts.index[0]} ({value_counts.iloc[0]} de {len(X)})")
-        
-        return True, "Prueba de ingeniería de características exitosa"
-    except Exception as e:
-        logging.error(f"Error en prueba de ingeniería de características: {e}")
-        logging.error(traceback.format_exc())
-        return False, f"Error: {str(e)}"
-
-def test_model_training():
-    """Prueba el entrenamiento del modelo."""
-    print("\n=== Prueba de entrenamiento del modelo ===")
-    logging.info("Probando entrenamiento del modelo...")
-    
-    # Asegurar que existen los datos
-    setup_test_data()
-    
-    try:
-        # Entrenar modelo con parámetros básicos (sin optimización para ahorrar tiempo)
-        print("- Entrenando modelo sin optimización de hiperparámetros...")
-        model = train_model(data_path=DATA_PATH, optimize_hyperparams=False)
-        
-        # Verificar que se guardó el modelo
-        model_path = os.path.join(PROJECT_ROOT, 'model', 'model.pkl')
-        if os.path.exists(model_path):
-            logging.info(f"Modelo guardado correctamente en {model_path}")
-            print(f"  ✅ Modelo guardado en {model_path}")
-            
-            # Verificar metadatos del entrenamiento
-            metadata_path = os.path.join(PROJECT_ROOT, 'model', 'training_metadata.json')
-            if os.path.exists(metadata_path):
-                import json
-                with open(metadata_path, 'r') as f:
-                    metadata = json.load(f)
-                
-                print("  Metadatos del modelo:")
-                print(f"    - Tipo: {metadata.get('model_type')}")
-                print(f"    - Características: {metadata.get('features_count')}")
-                print(f"    - Muestras: {metadata.get('samples_count')}")
-                print(f"    - Accuracy: {metadata.get('accuracy', 0):.4f}")
-                print(f"    - Fecha de entrenamiento: {metadata.get('timestamp')}")
-            
-            # Verificar feature importance
-            fi_path = os.path.join(PROJECT_ROOT, 'model', 'feature_importance.csv')
-            if os.path.exists(fi_path):
-                try:
-                    feature_imp = pd.read_csv(fi_path)
-                    print("  Top 5 características más importantes:")
-                    top_features = feature_imp.sort_values('importance', ascending=False).head(5)
-                    for i, (_, row) in enumerate(top_features.iterrows()):
-                        print(f"    {i+1}. {row['feature']}: {row['importance']:.4f}")
-                except Exception as e:
-                    print(f"  No se pudieron leer las características importantes: {e}")
-            
-            return True, "Entrenamiento del modelo exitoso"
-        else:
-            logging.error(f"Error: No se encontró el modelo guardado en {model_path}")
-            return False, f"Error: No se encontró el modelo guardado en {model_path}"
-    except Exception as e:
-        logging.error(f"Error en entrenamiento del modelo: {e}")
-        logging.error(traceback.format_exc())
-        return False, f"Error: {str(e)}"
-
-def test_prediction():
-    """Prueba la predicción con el modelo entrenado."""
-    print("\n=== Prueba de predicción ===")
-    logging.info("Probando predicción...")
-    
-    try:
-        # Cargar modelo
-        model_paths = [
-            os.path.join(PROJECT_ROOT, 'model', 'model.pkl'),
-            'ml-service/model/model.pkl'
-        ]
-        
-        model_path = None
-        for path in model_paths:
-            if os.path.exists(path):
-                model_path = path
-                break
-                
-        if model_path is None:
-            logging.error("No se encontró el modelo en ninguna ubicación conocida")
-            return False, "Error: Modelo no encontrado"
-            
-        print(f"- Cargando modelo desde {model_path}...")
+        # Cargar modelo y datos
         model = joblib.load(model_path)
+        data = pd.read_csv(test_data_path)
+        logging.info(f"Datos de prueba cargados: {len(data)} partidos")
         
-        # Crear instancia de feature engineering
-        print("- Inicializando motor de características...")
-        fe = TennisFeatureEngineering(data_path=DATA_PATH)
+        # Preparar características
+        feature_engineering = TennisFeatureEngineering()
+        X = feature_engineering.extract_features(data)
+        y = data['winner']
         
-        # Asegurar que tenemos estadísticas calculadas
-        if not fe.players_stats:
-            print("- Calculando estadísticas de jugadores...")
-            fe.build_player_statistics()
-            fe.build_head_to_head_statistics()
+        # Hacer predicciones
+        y_pred = model.predict(X)
+        y_pred_proba = model.predict_proba(X)[:, 1]
         
-        # Cargar un par de jugadores reales de nuestros datos
-        data = pd.read_csv(DATA_PATH)
-        
-        # Obtener dos jugadores diferentes
-        player1 = data['player1'].iloc[0]
-        player2 = data['player2'].iloc[0]
-        if player1 == player2:
-            player2 = data[data['player1'] != player1]['player1'].iloc[0]
-        
-        # Obtener rankings reales de nuestros datos
-        ranking_1 = data[data['player1'] == player1]['ranking_1'].iloc[0] if 'ranking_1' in data else None
-        ranking_2 = data[data['player2'] == player2]['ranking_2'].iloc[0] if 'ranking_2' in data else None
-        
-        # Datos de prueba
-        match_data = {
-            'player1': player1,
-            'player2': player2,
-            'surface': 'clay'
+        # Calcular métricas
+        metrics = {
+            'accuracy': accuracy_score(y, y_pred),
+            'precision': precision_score(y, y_pred),
+            'recall': recall_score(y, y_pred),
+            'f1': f1_score(y, y_pred),
+            'auc': roc_auc_score(y, y_pred_proba)
         }
         
-        # Añadir rankings solo si existen
-        if ranking_1 is not None:
-            match_data['ranking_1'] = ranking_1
-        if ranking_2 is not None:
-            match_data['ranking_2'] = ranking_2
-        
-        print(f"- Prediciendo resultado para {player1} vs {player2} en superficie clay...")
-        
-        # Extraer características
-        X = fe.transform_match_data(match_data)
-        
-        # Verificar que no tengamos NaN en las características
-        if X.isnull().any().any():
-            print("  ⚠️ Se encontraron valores NaN en las características de predicción")
-            print("  Imputando valores faltantes con 0...")
-            X = X.fillna(0)
-        
-        # Hacer predicción
-        prediction = model.predict(X)[0]
-        probability = max(model.predict_proba(X)[0])
-        
-        # Determinar ganador
-        winner = player1 if prediction == 0 else player2
-        
-        logging.info(f"Predicción exitosa: {winner} ({probability:.2f})")
-        print(f"  ✅ Predicción exitosa:")
-        print(f"    - Ganador predicho: {winner}")
-        print(f"    - Probabilidad: {probability:.2f}")
-        
-        # Verificar características usadas
-        print("  Características utilizadas:")
-        for i, feature in enumerate(X.columns[:5]):  # Mostrar las 5 primeras características
-            print(f"    - {feature}: {X.iloc[0, i]}")  # Usar iloc con coma para evitar la advertencia
-        
-        return True, f"Predicción exitosa: {winner} ({probability:.2f})"
-    except Exception as e:
-        logging.error(f"Error en predicción: {e}")
-        logging.error(traceback.format_exc())
-        return False, f"Error: {str(e)}"
-
-def test_prediction():
-    """Prueba la predicción con el modelo entrenado."""
-    print("\n=== Prueba de predicción ===")
-    logging.info("Probando predicción...")
-    
-    try:
-        # Cargar modelo
-        model_paths = [
-            os.path.join(PROJECT_ROOT, 'model', 'model.pkl'),
-            'ml-service/model/model.pkl'
-        ]
-        
-        model_path = None
-        for path in model_paths:
-            if os.path.exists(path):
-                model_path = path
-                break
-                
-        if model_path is None:
-            logging.error("No se encontró el modelo en ninguna ubicación conocida")
-            return False, "Error: Modelo no encontrado"
-            
-        print(f"- Cargando modelo desde {model_path}...")
-        model = joblib.load(model_path)
-        
-        # Crear instancia de feature engineering
-        print("- Inicializando motor de características...")
-        fe = TennisFeatureEngineering(data_path=DATA_PATH)
-        
-        # Asegurar que tenemos estadísticas calculadas
-        if not fe.players_stats:
-            print("- Calculando estadísticas de jugadores...")
-            fe.build_player_statistics()
-            fe.build_head_to_head_statistics()
-        
-        # Cargar un par de jugadores reales de nuestros datos
-        data = pd.read_csv(DATA_PATH)
-        
-        # Obtener dos jugadores diferentes
-        player1 = data['player1'].iloc[0]
-        player2 = data['player2'].iloc[0]
-        if player1 == player2:
-            player2 = data[data['player1'] != player1]['player1'].iloc[0]
-        
-        # Obtener rankings reales de nuestros datos
-        ranking_1 = data[data['player1'] == player1]['ranking_1'].iloc[0] if 'ranking_1' in data else None
-        ranking_2 = data[data['player2'] == player2]['ranking_2'].iloc[0] if 'ranking_2' in data else None
-        
-        # Datos de prueba
-        match_data = {
-            'player1': player1,
-            'player2': player2,
-            'surface': 'clay'
+        # Guardar resultados
+        results = {
+            'timestamp': datetime.now().strftime('%Y%m%d_%H%M%S'),
+            'model_path': model_path,
+            'test_data_path': test_data_path,
+            'metrics': metrics,
+            'predictions': y_pred.tolist(),
+            'probabilities': y_pred_proba.tolist()
         }
         
-        # Añadir rankings solo si existen
-        if ranking_1 is not None:
-            match_data['ranking_1'] = ranking_1
-        if ranking_2 is not None:
-            match_data['ranking_2'] = ranking_2
+        results_path = os.path.join(output_dir, 'test_results.json')
+        with open(results_path, 'w') as f:
+            import json
+            json.dump(results, f, indent=4)
         
-        print(f"- Prediciendo resultado para {player1} vs {player2} en superficie clay...")
+        logging.info(f"Resultados guardados en {results_path}")
+        logging.info("Métricas de rendimiento:")
+        for metric, value in metrics.items():
+            logging.info(f"{metric}: {value:.4f}")
         
-        # Extraer características
-        X = fe.transform_match_data(match_data)
+        return metrics
         
-        # Verificar que no tengamos NaN en las características
-        if X.isnull().any().any():
-            print("  ⚠️ Se encontraron valores NaN en las características de predicción")
-            print("  Imputando valores faltantes con 0...")
-            X = X.fillna(0)
-        
-        # Hacer predicción
-        prediction = model.predict(X)[0]
-        probability = max(model.predict_proba(X)[0])
-        
-        # Determinar ganador
-        winner = player1 if prediction == 0 else player2
-        
-        logging.info(f"Predicción exitosa: {winner} ({probability:.2f})")
-        print(f"  ✅ Predicción exitosa:")
-        print(f"    - Ganador predicho: {winner}")
-        print(f"    - Probabilidad: {probability:.2f}")
-        
-        # Verificar características usadas
-        print("  Características utilizadas:")
-        # Usar .iloc con indexación correcta para evitar la advertencia FutureWarning
-        for i, feature in enumerate(X.columns[:5]):  # Mostrar las 5 primeras características
-            value = X.iloc[0, i]  # Usar iloc con coma para acceder al primer elemento de la característica
-            print(f"    - {feature}: {value}")
-        
-        return True, f"Predicción exitosa: {winner} ({probability:.2f})"
     except Exception as e:
-        logging.error(f"Error en predicción: {e}")
-        logging.error(traceback.format_exc())
-        return False, f"Error: {str(e)}"
+        logging.error(f"Error probando sistema: {e}")
+        return None
 
 def main():
-    """Ejecuta todas las pruebas del sistema."""
-    print("=" * 50)
-    print("SISTEMA DE PRUEBAS PARA PREDICCIÓN DE PARTIDOS DE TENIS")
-    print("=" * 50)
-    print("Iniciando pruebas del sistema mejorado sin valores por defecto...")
-    print(f"Fecha y hora: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print("-" * 50)
+    """Función principal para probar el sistema."""
+    import argparse
     
-    start_time = time.time()
+    parser = argparse.ArgumentParser(description='Probar sistema de predicción de tenis')
+    parser.add_argument('--model', required=True, help='Ruta al modelo entrenado')
+    parser.add_argument('--test-data', required=True, help='Ruta a los datos de prueba')
+    parser.add_argument('--output-dir', default='ml-service/results',
+                      help='Directorio para guardar resultados')
     
-    # Contenedor para resultados
-    results = {}
+    args = parser.parse_args()
     
-    # Prueba 1: Ingeniería de características
-    print("\nEjecutando prueba 1: Ingeniería de características")
-    try:
-        success, message = test_feature_engineering()
-        results['feature_engineering'] = {'success': success, 'message': message}
-        if success:
-            print("✅ Prueba de ingeniería de características: EXITOSA")
-        else:
-            print("❌ Prueba de ingeniería de características: FALLIDA")
-            print(f"  Detalles: {message}")
-    except Exception as e:
-        print(f"❌ Prueba de ingeniería de características: ERROR CRÍTICO")
-        print(f"  Detalles: {str(e)}")
-        results['feature_engineering'] = {'success': False, 'message': str(e)}
-    
-    # Prueba 2: Entrenamiento del modelo
-    print("\nEjecutando prueba 2: Entrenamiento del modelo")
-    try:
-        success, message = test_model_training()
-        results['model_training'] = {'success': success, 'message': message}
-        if success:
-            print("✅ Prueba de entrenamiento del modelo: EXITOSA")
-        else:
-            print("❌ Prueba de entrenamiento del modelo: FALLIDA")
-            print(f"  Detalles: {message}")
-    except Exception as e:
-        print(f"❌ Prueba de entrenamiento del modelo: ERROR CRÍTICO")
-        print(f"  Detalles: {str(e)}")
-        results['model_training'] = {'success': False, 'message': str(e)}
-    
-    # Prueba 3: Predicción
-    print("\nEjecutando prueba 3: Predicción")
-    try:
-        success, message = test_prediction()
-        results['prediction'] = {'success': success, 'message': message}
-        if success:
-            print("✅ Prueba de predicción: EXITOSA")
-        else:
-            print("❌ Prueba de predicción: FALLIDA")
-            print(f"  Detalles: {message}")
-    except Exception as e:
-        print(f"❌ Prueba de predicción: ERROR CRÍTICO")
-        print(f"  Detalles: {str(e)}")
-        results['prediction'] = {'success': False, 'message': str(e)}
-    
-    # Resumen de pruebas
-    elapsed_time = time.time() - start_time
-    
-    print("\n" + "=" * 50)
-    print("RESUMEN DE PRUEBAS")
-    print("=" * 50)
-    
-    total = len(results)
-    passed = sum(1 for result in results.values() if result['success'])
-    
-    print(f"Pruebas completadas en {elapsed_time:.2f} segundos")
-    print(f"Resultado general: {passed}/{total} pruebas exitosas")
-    
-    if passed == total:
-        print("\n✅ TODAS LAS PRUEBAS PASARON EXITOSAMENTE")
-        print("El sistema está listo para usar en producción")
+    metrics = test_system(args.model, args.test_data, args.output_dir)
+    if metrics:
+        logging.info("Prueba del sistema completada exitosamente")
     else:
-        print("\n⚠️ ALGUNAS PRUEBAS FALLARON")
-        print("Se recomienda revisar los errores antes de usar en producción")
-        
-        # Mostrar detalles de errores
-        print("\nDetalles de errores:")
-        for test_name, result in results.items():
-            if not result['success']:
-                print(f"- {test_name}: {result['message']}")
-    
-    # Guardar resultados en un archivo de log
-    try:
-        log_dir = os.path.join(PROJECT_ROOT, 'logs')
-        os.makedirs(log_dir, exist_ok=True)
-        
-        log_file = os.path.join(log_dir, f'test_results_{time.strftime("%Y%m%d_%H%M%S")}.txt')
-        
-        with open(log_file, 'w') as f:
-            f.write("RESULTADOS DE PRUEBAS DEL SISTEMA\n")
-            f.write("=" * 50 + "\n")
-            f.write(f"Fecha y hora: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"Duración: {elapsed_time:.2f} segundos\n")
-            f.write(f"Resultado: {passed}/{total} pruebas exitosas\n\n")
-            
-            for test_name, result in results.items():
-                status = "EXITOSA" if result['success'] else "FALLIDA"
-                f.write(f"{test_name}: {status}\n")
-                f.write(f"Mensaje: {result['message']}\n\n")
-                
-        print(f"\nDetalles de las pruebas guardados en: {log_file}")
-    except Exception as e:
-        print(f"No se pudieron guardar los resultados de las pruebas: {e}")
+        logging.error("Error en la prueba del sistema")
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
