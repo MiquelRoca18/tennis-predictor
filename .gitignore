@@ -52,6 +52,9 @@ ml-service/evaluation_results/
 ml-service/tennis_data_analysis/
 *.png
 *.log
+*.lfs
+tennis_matches.csv
+
 
 # Archivos de IDEs y editores
 .idea/
