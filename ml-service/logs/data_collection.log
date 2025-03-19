@@ -1,0 +1,266 @@
+2025-03-18 20:45:42,311 - INFO: Iniciando recopilación de datos de 2015 a 2025
+2025-03-18 20:45:42,978 - INFO: Datos ATP 2020 recopilados: 1462 partidos
+2025-03-18 20:45:43,272 - INFO: Datos ATP 2021 recopilados: 2733 partidos
+2025-03-18 20:45:43,273 - INFO: Datos ATP 2018 recopilados: 2897 partidos
+2025-03-18 20:45:43,275 - INFO: Datos ATP 2019 recopilados: 2806 partidos
+2025-03-18 20:45:43,523 - ERROR: Error recopilando datos ATP 2025: HTTP Error 404: Not Found
+2025-03-18 20:45:44,797 - INFO: Datos ATP 2022 recopilados: 2917 partidos
+2025-03-18 20:45:44,802 - INFO: Datos ATP 2015 recopilados: 2943 partidos
+2025-03-18 20:45:44,803 - INFO: Datos ATP 2023 recopilados: 2986 partidos
+2025-03-18 20:45:45,182 - INFO: Datos ATP 2024 recopilados: 3076 partidos
+2025-03-18 20:45:45,306 - INFO: Datos ATP 2016 recopilados: 2941 partidos
+2025-03-18 20:45:46,128 - INFO: Datos ATP 2017 recopilados: 2911 partidos
+2025-03-18 20:45:47,990 - INFO: Recopilación completada: 33254 partidos guardados
+2025-03-18 20:52:56,795 - INFO: Iniciando recopilación de datos de 2015 a 2025
+2025-03-18 20:52:57,186 - INFO: Datos ATP 2023 recopilados: 2986 partidos
+2025-03-18 20:52:57,729 - INFO: Datos ATP 2020 recopilados: 1462 partidos
+2025-03-18 20:52:57,979 - INFO: Datos ATP 2016 recopilados: 2941 partidos
+2025-03-18 20:52:57,992 - INFO: Datos ATP 2019 recopilados: 2806 partidos
+2025-03-18 20:52:58,329 - ERROR: Error recopilando datos ATP 2025: HTTP Error 404: Not Found
+2025-03-18 20:52:59,000 - INFO: Datos ATP 2022 recopilados: 2917 partidos
+2025-03-18 20:52:59,001 - INFO: Datos ATP 2015 recopilados: 2943 partidos
+2025-03-18 20:52:59,003 - INFO: Datos ATP 2017 recopilados: 2911 partidos
+2025-03-18 20:52:59,004 - INFO: Datos ATP 2018 recopilados: 2897 partidos
+2025-03-18 20:52:59,005 - INFO: Datos ATP 2021 recopilados: 2733 partidos
+2025-03-18 20:52:59,211 - INFO: Datos ATP 2024 recopilados: 3076 partidos
+2025-03-18 20:53:02,101 - INFO: Recopilación completada: 33254 partidos guardados
+2025-03-18 20:55:19,642 - INFO: Iniciando recopilación de datos de 2015 a 2025
+2025-03-18 20:55:20,167 - INFO: Datos ATP 2017 recopilados: 2911 partidos
+2025-03-18 20:55:20,726 - INFO: Datos ATP 2020 recopilados: 1462 partidos
+2025-03-18 20:55:20,729 - INFO: Datos ATP 2022 recopilados: 2917 partidos
+2025-03-18 20:55:20,730 - INFO: Datos ATP 2019 recopilados: 2806 partidos
+2025-03-18 20:55:20,733 - INFO: Datos ATP 2021 recopilados: 2733 partidos
+2025-03-18 20:55:20,791 - INFO: Datos ATP 2016 recopilados: 2941 partidos
+2025-03-18 20:55:20,976 - INFO: Datos ATP 2023 recopilados: 2986 partidos
+2025-03-18 20:55:21,110 - ERROR: Error recopilando datos ATP 2025: HTTP Error 404: Not Found
+2025-03-18 20:55:21,110 - INFO: Datos ATP 2024 recopilados: 3076 partidos
+2025-03-18 20:55:21,191 - INFO: Datos ATP 2018 recopilados: 2897 partidos
+2025-03-18 20:55:21,326 - INFO: Datos ATP 2015 recopilados: 2943 partidos
+2025-03-18 20:55:25,193 - INFO: Recopilación completada: 33254 partidos guardados
+2025-03-18 20:57:40,553 - INFO: Iniciando recopilación de datos de 2015 a 2025
+2025-03-18 20:57:40,971 - INFO: Datos ATP 2020 recopilados: 1462 partidos
+2025-03-18 20:57:41,276 - INFO: Datos ATP 2022 recopilados: 2917 partidos
+2025-03-18 20:57:41,280 - INFO: Datos ATP 2021 recopilados: 2733 partidos
+2025-03-18 20:57:41,281 - INFO: Datos ATP 2024 recopilados: 3076 partidos
+2025-03-18 20:57:41,283 - INFO: Datos ATP 2019 recopilados: 2806 partidos
+2025-03-18 20:57:41,291 - INFO: Datos ATP 2016 recopilados: 2941 partidos
+2025-03-18 20:57:41,550 - INFO: Datos ATP 2023 recopilados: 2986 partidos
+2025-03-18 20:57:41,694 - ERROR: Error recopilando datos ATP 2025: HTTP Error 404: Not Found
+2025-03-18 20:57:41,885 - INFO: Datos ATP 2017 recopilados: 2911 partidos
+2025-03-18 20:57:42,994 - INFO: Datos ATP 2015 recopilados: 2943 partidos
+2025-03-18 20:57:43,328 - INFO: Datos ATP 2018 recopilados: 2897 partidos
+2025-03-18 20:57:45,974 - INFO: Recopilación completada: 33254 partidos guardados
+2025-03-18 21:09:00,337 - INFO: Iniciando recopilación de datos de 2015 a 2025
+2025-03-18 21:09:00,964 - INFO: Datos ATP 2020 recopilados: 1462 partidos
+2025-03-18 21:09:01,264 - INFO: Datos ATP 2019 recopilados: 2806 partidos
+2025-03-18 21:09:01,268 - INFO: Datos ATP 2018 recopilados: 2897 partidos
+2025-03-18 21:09:01,270 - INFO: Datos ATP 2021 recopilados: 2733 partidos
+2025-03-18 21:09:01,274 - INFO: Datos ATP 2023 recopilados: 2986 partidos
+2025-03-18 21:09:01,380 - INFO: Datos ATP 2024 recopilados: 3076 partidos
+2025-03-18 21:09:01,425 - INFO: Datos ATP 2022 recopilados: 2917 partidos
+2025-03-18 21:09:01,643 - ERROR: Error recopilando datos ATP 2025: HTTP Error 404: Not Found
+2025-03-18 21:09:01,751 - INFO: Datos ATP 2015 recopilados: 2943 partidos
+2025-03-18 21:09:04,947 - INFO: Datos ATP 2016 recopilados: 2941 partidos
+2025-03-18 21:09:04,947 - INFO: Datos ATP 2017 recopilados: 2911 partidos
+2025-03-18 21:09:06,054 - INFO: Recopilación completada: 33254 partidos guardados
+2025-03-18 21:10:41,642 - INFO: Iniciando recopilación de datos de 2015 a 2025
+2025-03-18 21:10:42,049 - INFO: Datos ATP 2020 recopilados: 1462 partidos
+2025-03-18 21:10:42,365 - INFO: Datos ATP 2015 recopilados: 2943 partidos
+2025-03-18 21:10:42,806 - ERROR: Error recopilando datos ATP 2025: HTTP Error 404: Not Found
+2025-03-18 21:10:42,922 - INFO: Datos ATP 2022 recopilados: 2917 partidos
+2025-03-18 21:10:42,922 - INFO: Datos ATP 2017 recopilados: 2911 partidos
+2025-03-18 21:10:42,922 - INFO: Datos ATP 2016 recopilados: 2941 partidos
+2025-03-18 21:10:42,923 - INFO: Datos ATP 2021 recopilados: 2733 partidos
+2025-03-18 21:10:42,924 - INFO: Datos ATP 2023 recopilados: 2986 partidos
+2025-03-18 21:10:42,925 - INFO: Datos ATP 2018 recopilados: 2897 partidos
+2025-03-18 21:10:42,933 - INFO: Datos ATP 2019 recopilados: 2806 partidos
+2025-03-18 21:10:42,940 - INFO: Datos ATP 2024 recopilados: 3076 partidos
+2025-03-18 21:10:47,128 - INFO: Recopilación completada: 33254 partidos guardados
+2025-03-19 11:20:44,929 - INFO: Iniciando recopilación de datos de 2015 a 2025
+2025-03-19 11:20:45,249 - INFO: Datos ATP 2020 recopilados: 1462 partidos
+2025-03-19 11:20:45,310 - INFO: Datos ATP 2024 recopilados: 3076 partidos
+2025-03-19 11:20:45,390 - INFO: Datos ATP 2022 recopilados: 2917 partidos
+2025-03-19 11:20:45,396 - INFO: Datos ATP 2015 recopilados: 2943 partidos
+2025-03-19 11:20:45,396 - INFO: Datos ATP 2017 recopilados: 2911 partidos
+2025-03-19 11:20:45,409 - INFO: Datos ATP 2018 recopilados: 2897 partidos
+2025-03-19 11:20:45,451 - INFO: Datos ATP 2021 recopilados: 2733 partidos
+2025-03-19 11:20:45,545 - ERROR: Error recopilando datos ATP 2025: HTTP Error 404: Not Found
+2025-03-19 11:20:45,545 - INFO: Datos ATP 2023 recopilados: 2986 partidos
+2025-03-19 11:20:45,697 - INFO: Datos ATP 2016 recopilados: 2941 partidos
+2025-03-19 11:20:45,748 - INFO: Datos ATP 2019 recopilados: 2806 partidos
+2025-03-19 11:20:45,796 - WARNING: Columna de ganador incorrecta. Intentando corregir.
+2025-03-19 11:37:14,713 - INFO: Iniciando recopilación de datos de 2015 a 2025
+2025-03-19 11:37:14,980 - INFO: Datos ATP 2020 recopilados: 1462 partidos
+2025-03-19 11:37:15,045 - INFO: Datos ATP 2021 recopilados: 2733 partidos
+2025-03-19 11:37:15,046 - INFO: Datos ATP 2019 recopilados: 2806 partidos
+2025-03-19 11:37:15,071 - INFO: Datos ATP 2018 recopilados: 2897 partidos
+2025-03-19 11:37:15,127 - INFO: Datos ATP 2015 recopilados: 2943 partidos
+2025-03-19 11:37:15,265 - INFO: Datos ATP 2016 recopilados: 2941 partidos
+2025-03-19 11:37:15,265 - INFO: Datos ATP 2022 recopilados: 2917 partidos
+2025-03-19 11:37:15,271 - INFO: Datos ATP 2024 recopilados: 3076 partidos
+2025-03-19 11:37:15,297 - ERROR: Error recopilando datos ATP 2025: HTTP Error 404: Not Found
+2025-03-19 11:37:15,365 - INFO: Datos ATP 2017 recopilados: 2911 partidos
+2025-03-19 11:37:15,445 - INFO: Datos ATP 2023 recopilados: 2986 partidos
+2025-03-19 11:37:15,521 - WARNING: Columna de ganador incorrecta. Intentando corregir.
+2025-03-19 11:40:56,909 - INFO: Iniciando recopilación de datos de 2015 a 2025
+2025-03-19 11:40:57,081 - INFO: Datos ATP 2020 recopilados: 1462 partidos
+2025-03-19 11:40:57,109 - INFO: Datos ATP 2018 recopilados: 2897 partidos
+2025-03-19 11:40:57,111 - INFO: Datos ATP 2015 recopilados: 2943 partidos
+2025-03-19 11:40:57,112 - INFO: Datos ATP 2016 recopilados: 2941 partidos
+2025-03-19 11:40:57,114 - INFO: Datos ATP 2021 recopilados: 2733 partidos
+2025-03-19 11:40:57,115 - INFO: Datos ATP 2019 recopilados: 2806 partidos
+2025-03-19 11:40:57,117 - INFO: Datos ATP 2017 recopilados: 2911 partidos
+2025-03-19 11:40:57,119 - INFO: Datos ATP 2022 recopilados: 2917 partidos
+2025-03-19 11:40:57,124 - INFO: Datos ATP 2023 recopilados: 2986 partidos
+2025-03-19 11:40:57,129 - INFO: Datos ATP 2024 recopilados: 3076 partidos
+2025-03-19 11:40:57,305 - ERROR: Error recopilando datos ATP 2025: HTTP Error 404: Not Found
+2025-03-19 11:40:57,309 - WARNING: Usando columna winner como referencia de ganador
+2025-03-19 11:40:57,341 - INFO: Recopilación completada: 27672 partidos guardados
+2025-03-19 11:47:10,737 - INFO: Iniciando recopilación de datos de 2015 a 2025
+2025-03-19 11:47:11,003 - INFO: Datos ATP 2020 recopilados: 1462 partidos
+2025-03-19 11:47:11,065 - INFO: Datos ATP 2019 recopilados: 2806 partidos
+2025-03-19 11:47:11,068 - INFO: Datos ATP 2022 recopilados: 2917 partidos
+2025-03-19 11:47:11,124 - INFO: Datos ATP 2015 recopilados: 2943 partidos
+2025-03-19 11:47:11,237 - INFO: Datos ATP 2021 recopilados: 2733 partidos
+2025-03-19 11:47:11,288 - INFO: Datos ATP 2024 recopilados: 3076 partidos
+2025-03-19 11:47:11,290 - ERROR: Error recopilando datos ATP 2025: HTTP Error 404: Not Found
+2025-03-19 11:47:11,291 - INFO: Datos ATP 2023 recopilados: 2986 partidos
+2025-03-19 11:47:11,292 - INFO: Datos ATP 2018 recopilados: 2897 partidos
+2025-03-19 11:47:11,292 - INFO: Datos ATP 2017 recopilados: 2911 partidos
+2025-03-19 11:47:11,358 - INFO: Datos ATP 2016 recopilados: 2941 partidos
+2025-03-19 11:47:11,545 - WARNING: Usando columna winner como referencia de ganador
+2025-03-19 11:47:11,627 - INFO: Recopilación completada: 33244 partidos guardados
+2025-03-19 12:10:50,858 - INFO: Iniciando recopilación de datos de 2015 a 2025 para tours: atp, wta
+2025-03-19 12:10:50,858 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2015.csv (intento 1/3)
+2025-03-19 12:10:50,859 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2015.csv (intento 1/3)
+2025-03-19 12:10:50,859 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2016.csv (intento 1/3)
+2025-03-19 12:10:50,859 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2016.csv (intento 1/3)
+2025-03-19 12:10:50,859 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2017.csv (intento 1/3)
+2025-03-19 12:10:50,859 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2017.csv (intento 1/3)
+2025-03-19 12:10:50,859 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2018.csv (intento 1/3)
+2025-03-19 12:10:50,859 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2018.csv (intento 1/3)
+2025-03-19 12:10:51,173 - ERROR: No se encontró mapeo para la fuente: github_jeff_sackmann_wta
+2025-03-19 12:10:51,175 - WARNING: No se pudieron obtener datos WTA para 2015
+2025-03-19 12:10:51,175 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2019.csv (intento 1/3)
+2025-03-19 12:10:51,755 - INFO: Datos ATP 2017 recopilados de GitHub: 2911 partidos
+2025-03-19 12:10:51,777 - ERROR: No se encontró mapeo para la fuente: github_jeff_sackmann_wta
+2025-03-19 12:10:51,777 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2019.csv (intento 1/3)
+2025-03-19 12:10:51,779 - WARNING: No se pudieron obtener datos WTA para 2016
+2025-03-19 12:10:51,786 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2020.csv (intento 1/3)
+2025-03-19 12:10:51,881 - ERROR: No se encontró mapeo para la fuente: github_jeff_sackmann_wta
+2025-03-19 12:10:51,882 - WARNING: No se pudieron obtener datos WTA para 2018
+2025-03-19 12:10:51,883 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2020.csv (intento 1/3)
+2025-03-19 12:10:51,889 - INFO: Datos ATP 2015 recopilados de GitHub: 2943 partidos
+2025-03-19 12:10:51,889 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2021.csv (intento 1/3)
+2025-03-19 12:10:51,896 - ERROR: No se encontró mapeo para la fuente: github_jeff_sackmann_wta
+2025-03-19 12:10:51,899 - WARNING: No se pudieron obtener datos WTA para 2017
+2025-03-19 12:10:51,899 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2021.csv (intento 1/3)
+2025-03-19 12:10:52,139 - INFO: Datos ATP 2016 recopilados de GitHub: 2941 partidos
+2025-03-19 12:10:52,149 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2022.csv (intento 1/3)
+2025-03-19 12:10:52,304 - INFO: Datos ATP 2018 recopilados de GitHub: 2897 partidos
+2025-03-19 12:10:52,304 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2022.csv (intento 1/3)
+2025-03-19 12:10:52,338 - INFO: Datos ATP 2019 recopilados de GitHub: 2806 partidos
+2025-03-19 12:10:52,338 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2023.csv (intento 1/3)
+2025-03-19 12:10:52,408 - ERROR: No se encontró mapeo para la fuente: github_jeff_sackmann_wta
+2025-03-19 12:10:52,413 - WARNING: No se pudieron obtener datos WTA para 2019
+2025-03-19 12:10:52,415 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2023.csv (intento 1/3)
+2025-03-19 12:10:52,515 - INFO: Datos ATP 2020 recopilados de GitHub: 1462 partidos
+2025-03-19 12:10:52,515 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2024.csv (intento 1/3)
+2025-03-19 12:10:52,517 - ERROR: No se encontró mapeo para la fuente: github_jeff_sackmann_wta
+2025-03-19 12:10:52,517 - WARNING: No se pudieron obtener datos WTA para 2021
+2025-03-19 12:10:52,517 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2024.csv (intento 1/3)
+2025-03-19 12:10:52,725 - INFO: Datos ATP 2021 recopilados de GitHub: 2733 partidos
+2025-03-19 12:10:52,725 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2025.csv (intento 1/3)
+2025-03-19 12:10:52,955 - INFO: Datos ATP 2022 recopilados de GitHub: 2917 partidos
+2025-03-19 12:10:52,955 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2025.csv (intento 1/3)
+2025-03-19 12:10:52,960 - ERROR: No se encontró mapeo para la fuente: github_jeff_sackmann_wta
+2025-03-19 12:10:52,961 - WARNING: No se pudieron obtener datos WTA para 2023
+2025-03-19 12:10:52,988 - WARNING: Datos para atp 2025 no encontrados (404)
+2025-03-19 12:10:53,013 - INFO: Intentando obtener datos de UltimateTennisStatistics para atp 2025
+2025-03-19 12:10:53,016 - ERROR: No se pudieron obtener datos ATP para 2025 de ninguna fuente
+2025-03-19 12:10:53,200 - INFO: Datos ATP 2023 recopilados de GitHub: 2986 partidos
+2025-03-19 12:10:53,203 - ERROR: No se encontró mapeo para la fuente: github_jeff_sackmann_wta
+2025-03-19 12:10:53,204 - WARNING: No se pudieron obtener datos WTA para 2024
+2025-03-19 12:10:53,309 - WARNING: Datos para wta 2025 no encontrados (404)
+2025-03-19 12:10:53,442 - WARNING: No se pudieron obtener datos WTA para 2025
+2025-03-19 12:10:53,442 - INFO: Datos ATP 2024 recopilados de GitHub: 3076 partidos
+2025-03-19 12:10:54,517 - ERROR: No se encontró mapeo para la fuente: github_jeff_sackmann_wta
+2025-03-19 12:10:54,517 - WARNING: No se pudieron obtener datos WTA para 2022
+2025-03-19 12:10:54,541 - ERROR: No se encontró mapeo para la fuente: github_jeff_sackmann_wta
+2025-03-19 12:10:54,541 - WARNING: No se pudieron obtener datos WTA para 2020
+2025-03-19 12:10:54,548 - WARNING: Se encontraron valores nulos en los datos:
+ranking_1    139
+ranking_2    355
+surface       53
+dtype: int64
+2025-03-19 12:10:54,564 - INFO: Normalización de superficies: {'Hard': 16325, 'Clay': 8344, 'Grass': 2931, 'Carpet': 19} -> {'hard': 16325, 'clay': 8344, 'grass': 2931, 'carpet': 19}
+2025-03-19 12:10:54,570 - WARNING: Se encontraron 6 registros duplicados, eliminando...
+2025-03-19 12:10:54,577 - INFO: Limpieza de datos: 27672 -> 27613 registros
+2025-03-19 12:10:54,654 - INFO: Recopilación completada: 27613 partidos guardados
+2025-03-19 12:17:24,918 - INFO: Iniciando recopilación de datos de 2015 a 2025 para tours: atp, wta
+2025-03-19 12:17:24,918 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2015.csv (intento 1/3)
+2025-03-19 12:17:24,918 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2015.csv (intento 1/3)
+2025-03-19 12:17:24,919 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2016.csv (intento 1/3)
+2025-03-19 12:17:24,919 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2016.csv (intento 1/3)
+2025-03-19 12:17:24,919 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2017.csv (intento 1/3)
+2025-03-19 12:17:24,919 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2017.csv (intento 1/3)
+2025-03-19 12:17:24,920 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2018.csv (intento 1/3)
+2025-03-19 12:17:24,920 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2018.csv (intento 1/3)
+2025-03-19 12:17:25,195 - ERROR: No se encontró mapeo para la fuente: github_jeff_sackmann_wta
+2025-03-19 12:17:25,195 - WARNING: No se pudieron obtener datos WTA para 2016
+2025-03-19 12:17:25,196 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2019.csv (intento 1/3)
+2025-03-19 12:17:25,430 - ERROR: No se encontró mapeo para la fuente: github_jeff_sackmann_wta
+2025-03-19 12:17:25,431 - WARNING: No se pudieron obtener datos WTA para 2018
+2025-03-19 12:17:25,431 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2019.csv (intento 1/3)
+2025-03-19 12:17:25,459 - ERROR: No se encontró mapeo para la fuente: github_jeff_sackmann_wta
+2025-03-19 12:17:25,473 - WARNING: No se pudieron obtener datos WTA para 2017
+2025-03-19 12:17:25,505 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2020.csv (intento 1/3)
+2025-03-19 12:17:25,555 - INFO: Datos ATP 2015 recopilados de GitHub: 2943 partidos
+2025-03-19 12:17:25,555 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2020.csv (intento 1/3)
+2025-03-19 12:17:25,723 - INFO: Datos ATP 2018 recopilados de GitHub: 2897 partidos
+2025-03-19 12:17:25,723 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2021.csv (intento 1/3)
+2025-03-19 12:17:25,729 - ERROR: No se encontró mapeo para la fuente: github_jeff_sackmann_wta
+2025-03-19 12:17:25,729 - WARNING: No se pudieron obtener datos WTA para 2015
+2025-03-19 12:17:25,731 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2021.csv (intento 1/3)
+2025-03-19 12:17:26,160 - INFO: Datos ATP 2017 recopilados de GitHub: 2911 partidos
+2025-03-19 12:17:26,160 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2022.csv (intento 1/3)
+2025-03-19 12:17:26,286 - INFO: Datos ATP 2016 recopilados de GitHub: 2941 partidos
+2025-03-19 12:17:26,287 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2022.csv (intento 1/3)
+2025-03-19 12:17:26,421 - INFO: Datos ATP 2019 recopilados de GitHub: 2806 partidos
+2025-03-19 12:17:26,421 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2023.csv (intento 1/3)
+2025-03-19 12:17:26,426 - ERROR: No se encontró mapeo para la fuente: github_jeff_sackmann_wta
+2025-03-19 12:17:26,427 - WARNING: No se pudieron obtener datos WTA para 2019
+2025-03-19 12:17:26,427 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2023.csv (intento 1/3)
+2025-03-19 12:17:26,428 - ERROR: No se encontró mapeo para la fuente: github_jeff_sackmann_wta
+2025-03-19 12:17:26,428 - WARNING: No se pudieron obtener datos WTA para 2020
+2025-03-19 12:17:26,428 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2024.csv (intento 1/3)
+2025-03-19 12:17:26,598 - INFO: Datos ATP 2020 recopilados de GitHub: 1462 partidos
+2025-03-19 12:17:26,598 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2024.csv (intento 1/3)
+2025-03-19 12:17:26,602 - ERROR: No se encontró mapeo para la fuente: github_jeff_sackmann_wta
+2025-03-19 12:17:26,603 - WARNING: No se pudieron obtener datos WTA para 2021
+2025-03-19 12:17:26,603 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_2025.csv (intento 1/3)
+2025-03-19 12:17:26,819 - INFO: Datos ATP 2021 recopilados de GitHub: 2733 partidos
+2025-03-19 12:17:26,819 - INFO: Descargando datos de https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_matches_2025.csv (intento 1/3)
+2025-03-19 12:17:26,826 - WARNING: Datos para atp 2025 no encontrados (404)
+2025-03-19 12:17:26,826 - INFO: Intentando obtener datos de UltimateTennisStatistics para atp 2025
+2025-03-19 12:17:26,826 - ERROR: No se pudieron obtener datos ATP para 2025 de ninguna fuente
+2025-03-19 12:17:26,828 - ERROR: No se encontró mapeo para la fuente: github_jeff_sackmann_wta
+2025-03-19 12:17:26,828 - WARNING: No se pudieron obtener datos WTA para 2022
+2025-03-19 12:17:27,056 - INFO: Datos ATP 2022 recopilados de GitHub: 2917 partidos
+2025-03-19 12:17:27,056 - WARNING: Datos para wta 2025 no encontrados (404)
+2025-03-19 12:17:27,056 - WARNING: No se pudieron obtener datos WTA para 2025
+2025-03-19 12:17:27,062 - ERROR: No se encontró mapeo para la fuente: github_jeff_sackmann_wta
+2025-03-19 12:17:27,062 - WARNING: No se pudieron obtener datos WTA para 2023
+2025-03-19 12:17:27,304 - INFO: Datos ATP 2023 recopilados de GitHub: 2986 partidos
+2025-03-19 12:17:27,542 - INFO: Datos ATP 2024 recopilados de GitHub: 3076 partidos
+2025-03-19 12:17:27,543 - ERROR: No se encontró mapeo para la fuente: github_jeff_sackmann_wta
+2025-03-19 12:17:27,544 - WARNING: No se pudieron obtener datos WTA para 2024
+2025-03-19 12:17:27,547 - WARNING: Se encontraron valores nulos en los datos:
+ranking_1    139
+ranking_2    355
+surface       53
+dtype: int64
+2025-03-19 12:17:27,556 - INFO: Normalización de superficies: {'Hard': 16325, 'Clay': 8344, 'Grass': 2931, 'Carpet': 19} -> {'hard': 16325, 'clay': 8344, 'grass': 2931, 'carpet': 19}
+2025-03-19 12:17:27,560 - WARNING: Se encontraron 6 registros duplicados, eliminando...
+2025-03-19 12:17:27,565 - INFO: Limpieza de datos: 27672 -> 27613 registros
+2025-03-19 12:17:27,641 - INFO: Recopilación completada: 27613 partidos guardados

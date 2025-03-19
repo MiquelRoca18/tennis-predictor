@@ -1,0 +1,15 @@
+RESULTADOS DE PRUEBAS DEL SISTEMA
+==================================================
+Fecha y hora: 2025-03-19 12:18:20
+Duración: 17.53 segundos
+Resultado: 3/3 pruebas exitosas
+
+feature_engineering: EXITOSA
+Mensaje: Prueba de ingeniería de características exitosa
+
+model_training: EXITOSA
+Mensaje: Entrenamiento del modelo exitoso
+
+prediction: EXITOSA
+Mensaje: Predicción exitosa: Novak Djokovic (1.00)
+

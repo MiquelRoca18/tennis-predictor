@@ -1,0 +1,44 @@
+{
+    "model_type": "RandomForest",
+    "timestamp": "2025-03-19 13:43:57",
+    "features_count": 16,
+    "samples_count": 66382,
+    "train_samples": 53105,
+    "test_samples": 13277,
+    "accuracy": 0.7816524817353318,
+    "precision": 0.7816585468951633,
+    "recall": 0.7816524817353318,
+    "f1_score": 0.7816512529881223,
+    "training_time_seconds": 1077.0347888469696,
+    "features": [
+        "ranking_1",
+        "ranking_2",
+        "winrate_1",
+        "winrate_2",
+        "surface_code",
+        "surface_winrate_1",
+        "surface_winrate_2",
+        "surface_advantage",
+        "h2h_advantage",
+        "surface_h2h_advantage",
+        "recent_form_1",
+        "recent_form_2",
+        "recent_form_diff",
+        "experience_1",
+        "experience_2",
+        "experience_diff"
+    ],
+    "data_source": "balanced_data.csv",
+    "optimize_hyperparams": true,
+    "class_distribution": {
+        "0": 33191,
+        "1": 33191
+    },
+    "best_params": {
+        "max_depth": null,
+        "max_features": "sqrt",
+        "min_samples_leaf": 2,
+        "min_samples_split": 5,
+        "n_estimators": 200
+    }
+}
