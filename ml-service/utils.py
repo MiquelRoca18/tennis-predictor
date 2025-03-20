@@ -465,7 +465,7 @@ def preprocess_match_data(match_data):
             features['surface_code'] = 0  # Hard como superficie más común
             
         return features
-    
+
 class PlayerStatsManager:
     """
     Clase para gestionar estadísticas de jugadores basadas en datos históricos.
@@ -590,6 +590,9 @@ class PlayerStatsManager:
         players = set(data['player_1'].tolist() + data['player_2'].tolist())
         surfaces = data['surface'].unique()
         
+        # Verificar si el dataset tiene columnas de winrate por superficie precalculadas
+        has_precalculated = 'surface_winrate_1' in data.columns and 'surface_winrate_2' in data.columns
+        
         for player in players:
             self.surface_stats[player] = {}
             
@@ -607,7 +610,31 @@ class PlayerStatsManager:
                 total_surface_wins = p1_surface_wins + p2_surface_wins
                 
                 # Calcular tasa de victoria en esta superficie
-                surface_winrate = (total_surface_wins / total_surface_matches * 100) if total_surface_matches > 0 else 50.0
+                if total_surface_matches > 0:
+                    surface_winrate = (total_surface_wins / total_surface_matches * 100)
+                elif has_precalculated:
+                    # Si hay datos precalculados en el CSV y no tenemos partidos,
+                    # intentamos usar esos valores precalculados
+                    surface_winrates = []
+                    
+                    for _, row in p1_surface_matches.iterrows():
+                        if 'surface_winrate_1' in row and pd.notna(row['surface_winrate_1']):
+                            surface_winrates.append(row['surface_winrate_1'])
+                    
+                    for _, row in p2_surface_matches.iterrows():
+                        if 'surface_winrate_2' in row and pd.notna(row['surface_winrate_2']):
+                            surface_winrates.append(row['surface_winrate_2'])
+                    
+                    if surface_winrates:
+                        surface_winrate = sum(surface_winrates) / len(surface_winrates)
+                        # Estimar el número de partidos basado en el winrate
+                        # Asumimos al menos 5 partidos si tenemos una tasa de victoria
+                        total_surface_matches = 5
+                        total_surface_wins = round((surface_winrate / 100) * total_surface_matches)
+                    else:
+                        surface_winrate = 50.0
+                else:
+                    surface_winrate = 50.0
                 
                 # Guardar estadísticas
                 self.surface_stats[player][surface] = {
@@ -648,16 +675,61 @@ class PlayerStatsManager:
         Returns:
             Diccionario con estadísticas o valores predeterminados
         """
-        if player_name in self.surface_stats and surface in self.surface_stats[player_name]:
-            return self.surface_stats[player_name][surface]
-        else:
-            # Usar estadísticas generales si no hay específicas para esta superficie
-            general_stats = self.get_player_stats(player_name)
-            return {
-                'matches': 0,
-                'wins': 0,
-                'winrate': general_stats['winrate']
-            }
+        try:
+            if os.path.exists(self.data_path):
+                data = pd.read_csv(self.data_path)
+                
+                # Normalizar el nombre de la superficie
+                surface = surface.capitalize()
+                
+                # Filtrar partidos de este jugador en esta superficie
+                p1_matches = data[(data['player_1'] == player_name) & (data['surface'] == surface)]
+                p2_matches = data[(data['player_2'] == player_name) & (data['surface'] == surface)]
+                
+                # Contar victorias y partidos reales
+                p1_wins = len(p1_matches[p1_matches['winner'] == 0])
+                p2_wins = len(p2_matches[p2_matches['winner'] == 1])
+                total_matches = len(p1_matches) + len(p2_matches)
+                total_wins = p1_wins + p2_wins
+                
+                # Obtener winrate precalculado del CSV
+                surface_winrates = []
+                
+                # Buscar winrate en partidos como player_1
+                for _, row in p1_matches.iterrows():
+                    if pd.notna(row['surface_winrate_1']):
+                        surface_winrates.append(row['surface_winrate_1'])
+                
+                # Buscar winrate en partidos como player_2
+                for _, row in p2_matches.iterrows():
+                    if pd.notna(row['surface_winrate_2']):
+                        surface_winrates.append(row['surface_winrate_2'])
+                
+                # Si encontramos winrates precalculados, usar el promedio
+                if surface_winrates:
+                    winrate = sum(surface_winrates) / len(surface_winrates)
+                else:
+                    # Si no hay winrate precalculado, usar el winrate general del jugador
+                    general_stats = self.get_player_stats(player_name)
+                    winrate = general_stats['winrate']
+                
+                return {
+                    'matches': total_matches,  # Número real de partidos
+                    'wins': total_wins,        # Número real de victorias
+                    'winrate': winrate
+                }
+                
+        except Exception as e:
+            logging.warning(f"Error obteniendo estadísticas de superficie desde CSV: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        # Si hay algún error o no encontramos datos, devolver 0 en lugar de valores estimados
+        return {
+            'matches': 0,  # Si no hay datos, mostrar 0 partidos
+            'wins': 0,     # Si no hay datos, mostrar 0 victorias
+            'winrate': 50.0  # Valor neutro para winrate
+        }
     
     def get_head_to_head(self, player1, player2):
         """
