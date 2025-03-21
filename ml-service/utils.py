@@ -40,16 +40,20 @@ class TennisFeatureEngineering:
         """Inicializa la clase con configuraciones por defecto."""
         self.scaler = StandardScaler()
         self.feature_weights = {
-            'ranking': 0.3,
-            'h2h': 0.2,
-            'recent_form': 0.2,
+            'ranking': 0.15,
+            'h2h': 0.15,
+            'recent_form': 0.15,
             'surface': 0.15,
-            'fatigue': 0.15
+            'fatigue': 0.10,
+            'physical': 0.10,
+            'temporal': 0.10,
+            'tournament': 0.10
         }
         self.data_path = data_path
         self.players_stats = {}
         self.head_to_head_stats = {}
-
+        self.tournament_stats = {}
+        self.temporal_stats = {}
         
     def extract_features(self, data: pd.DataFrame) -> pd.DataFrame:
         """
@@ -80,6 +84,16 @@ class TennisFeatureEngineering:
             
             # Características head-to-head
             features['h2h_advantage'] = self._calculate_h2h_advantage(data)
+            
+            # Nuevas características contextuales
+            features['physical_advantage'] = self._calculate_physical_advantage(data)
+            features['tournament_experience'] = self._calculate_tournament_experience(data)
+            features['momentum'] = self._calculate_momentum(data)
+            
+            # Nuevas características temporales
+            features['seasonal_advantage'] = self._calculate_seasonal_advantage(data)
+            features['rest_advantage'] = self._calculate_rest_advantage(data)
+            features['time_of_day_advantage'] = self._calculate_time_of_day_advantage(data)
             
             # Normalizar características
             features = self._normalize_features(features)
@@ -122,6 +136,149 @@ class TennisFeatureEngineering:
             data['loser_h2h_wins'] / (data['winner_h2h_wins'] + data['loser_h2h_wins'] + 1)
         )
     
+    def _calculate_physical_advantage(self, data: pd.DataFrame) -> pd.Series:
+        """Calcula ventajas físicas entre jugadores."""
+        physical_advantage = pd.Series(0, index=data.index)
+        
+        # Ventaja de altura (más importante en superficies rápidas)
+        height_advantage = data['winner_ht'] - data['loser_ht']
+        surface_speed_factor = data['surface'].map({
+            'Hard': 1.0,
+            'Clay': 0.5,
+            'Grass': 1.2,
+            'Carpet': 1.1
+        })
+        
+        # Ventaja de edad (experiencia vs juventud)
+        age_advantage = np.where(
+            data['winner_age'] > data['loser_age'],
+            0.5,  # Experiencia
+            -0.5  # Juventud
+        )
+        
+        # Ventaja de mano dominante
+        hand_advantage = np.where(
+            data['winner_hand'] == data['loser_hand'],
+            0,  # Misma mano
+            np.where(
+                data['winner_hand'] == 'R',
+                0.3,  # Ventaja para diestros
+                -0.3  # Ventaja para zurdos
+            )
+        )
+        
+        physical_advantage = (
+            height_advantage * surface_speed_factor +
+            age_advantage +
+            hand_advantage
+        )
+        
+        return physical_advantage
+
+    def _calculate_tournament_experience(self, data: pd.DataFrame) -> pd.Series:
+        """Calcula la experiencia en el torneo actual."""
+        tournament_experience = pd.Series(0, index=data.index)
+        
+        for idx, row in data.iterrows():
+            tournament = row['tournament']
+            winner = row['player_1']
+            loser = row['player_2']
+            
+            # Obtener experiencia en el torneo
+            winner_exp = self.tournament_stats.get((tournament, winner), {}).get('matches_played', 0)
+            loser_exp = self.tournament_stats.get((tournament, loser), {}).get('matches_played', 0)
+            
+            # Calcular ventaja de experiencia
+            tournament_experience[idx] = winner_exp - loser_exp
+            
+        return tournament_experience
+
+    def _calculate_momentum(self, data: pd.DataFrame) -> pd.Series:
+        """Calcula el momentum de los jugadores basado en resultados recientes."""
+        momentum = pd.Series(0, index=data.index)
+        
+        for idx, row in data.iterrows():
+            winner = row['player_1']
+            loser = row['player_2']
+            
+            # Obtener resultados recientes
+            winner_recent = self.players_stats.get(winner, {}).get('recent_results', [])
+            loser_recent = self.players_stats.get(loser, {}).get('recent_results', [])
+            
+            # Calcular momentum (ponderado por recencia)
+            winner_momentum = sum(
+                (1 - i/len(winner_recent)) * result 
+                for i, result in enumerate(winner_recent)
+            ) if winner_recent else 0
+            
+            loser_momentum = sum(
+                (1 - i/len(loser_recent)) * result 
+                for i, result in enumerate(loser_recent)
+            ) if loser_recent else 0
+            
+            momentum[idx] = winner_momentum - loser_momentum
+            
+        return momentum
+
+    def _calculate_seasonal_advantage(self, data: pd.DataFrame) -> pd.Series:
+        """Calcula ventajas estacionales basadas en el momento del año."""
+        seasonal_advantage = pd.Series(0, index=data.index)
+        
+        for idx, row in data.iterrows():
+            match_date = pd.to_datetime(row['match_date'])
+            month = match_date.month
+            
+            # Obtener preferencias estacionales de los jugadores
+            winner_seasonal = self.players_stats.get(row['player_1'], {}).get('seasonal_preferences', {})
+            loser_seasonal = self.players_stats.get(row['player_2'], {}).get('seasonal_preferences', {})
+            
+            # Calcular ventaja estacional
+            winner_month_perf = winner_seasonal.get(month, 0.5)
+            loser_month_perf = loser_seasonal.get(month, 0.5)
+            
+            seasonal_advantage[idx] = winner_month_perf - loser_month_perf
+            
+        return seasonal_advantage
+
+    def _calculate_rest_advantage(self, data: pd.DataFrame) -> pd.Series:
+        """Calcula la ventaja por días de descanso."""
+        rest_advantage = pd.Series(0, index=data.index)
+        
+        for idx, row in data.iterrows():
+            winner = row['player_1']
+            loser = row['player_2']
+            
+            # Obtener días de descanso
+            winner_rest = self.players_stats.get(winner, {}).get('days_rest', 0)
+            loser_rest = self.players_stats.get(loser, {}).get('days_rest', 0)
+            
+            # Calcular ventaja de descanso (con penalización por demasiado descanso)
+            winner_rest_advantage = min(winner_rest, 7) / 7  # Máximo 7 días de ventaja
+            loser_rest_advantage = min(loser_rest, 7) / 7
+            
+            rest_advantage[idx] = winner_rest_advantage - loser_rest_advantage
+            
+        return rest_advantage
+
+    def _calculate_time_of_day_advantage(self, data: pd.DataFrame) -> pd.Series:
+        """Calcula ventajas basadas en la hora del día."""
+        time_advantage = pd.Series(0, index=data.index)
+        
+        for idx, row in data.iterrows():
+            match_time = pd.to_datetime(row['match_date']).hour
+            
+            # Obtener preferencias de hora de los jugadores
+            winner_time_pref = self.players_stats.get(row['player_1'], {}).get('time_preferences', {})
+            loser_time_pref = self.players_stats.get(row['player_2'], {}).get('time_preferences', {})
+            
+            # Calcular ventaja por hora
+            winner_hour_perf = winner_time_pref.get(match_time, 0.5)
+            loser_hour_perf = loser_time_pref.get(match_time, 0.5)
+            
+            time_advantage[idx] = winner_hour_perf - loser_hour_perf
+            
+        return time_advantage
+    
     def _normalize_features(self, features: pd.DataFrame) -> pd.DataFrame:
         """Normaliza las características usando StandardScaler."""
         return pd.DataFrame(
@@ -140,6 +297,7 @@ class TennisFeatureEngineering:
         
         try:
             data = pd.read_csv(self.data_path)
+            data['match_date'] = pd.to_datetime(data['match_date'])
             players = set(data['player_1'].tolist() + data['player_2'].tolist())
             
             for player in players:
@@ -192,13 +350,67 @@ class TennisFeatureEngineering:
                 # Calcular tasa de victoria
                 win_rate = (total_wins / total_matches) * 100 if total_matches > 0 else 50
                 
+                # Nuevas estadísticas temporales
+                recent_results = []
+                seasonal_preferences = {}
+                time_preferences = {}
+                
+                # Ordenar partidos por fecha
+                all_matches = pd.concat([p1_matches, p2_matches]).sort_values('match_date')
+                
+                # Calcular resultados recientes (últimos 10 partidos)
+                for _, match in all_matches.tail(10).iterrows():
+                    if match['player_1'] == player:
+                        recent_results.append(1 if match['winner'] == 0 else 0)
+                    else:
+                        recent_results.append(1 if match['winner'] == 1 else 0)
+                
+                # Calcular preferencias estacionales
+                for month in range(1, 13):
+                    month_matches = all_matches[all_matches['match_date'].dt.month == month]
+                    if not month_matches.empty:
+                        month_wins = sum(
+                            1 if (row['player_1'] == player and row['winner'] == 0) or
+                                (row['player_2'] == player and row['winner'] == 1)
+                            else 0
+                            for _, row in month_matches.iterrows()
+                        )
+                        seasonal_preferences[month] = month_wins / len(month_matches)
+                
+                # Calcular preferencias por hora del día
+                for hour in range(24):
+                    hour_matches = all_matches[all_matches['match_date'].dt.hour == hour]
+                    if not hour_matches.empty:
+                        hour_wins = sum(
+                            1 if (row['player_1'] == player and row['winner'] == 0) or
+                                (row['player_2'] == player and row['winner'] == 1)
+                            else 0
+                            for _, row in hour_matches.iterrows()
+                        )
+                        time_preferences[hour] = hour_wins / len(hour_matches)
+                
+                # Calcular días de descanso promedio
+                if len(all_matches) > 1:
+                    rest_days = []
+                    for i in range(1, len(all_matches)):
+                        days = (all_matches.iloc[i]['match_date'] - all_matches.iloc[i-1]['match_date']).days
+                        if days > 0:
+                            rest_days.append(days)
+                    avg_rest_days = np.mean(rest_days) if rest_days else 0
+                else:
+                    avg_rest_days = 0
+                
                 # Guardar estadísticas del jugador
                 self.players_stats[player] = {
                     'total_matches': total_matches,
                     'total_wins': total_wins,
                     'win_rate': win_rate,
                     'avg_ranking': avg_ranking,
-                    'surface_stats': surface_stats
+                    'surface_stats': surface_stats,
+                    'recent_results': recent_results,
+                    'seasonal_preferences': seasonal_preferences,
+                    'time_preferences': time_preferences,
+                    'days_rest': avg_rest_days
                 }
             
             logging.info(f"Estadísticas calculadas para {len(self.players_stats)} jugadores")
@@ -214,6 +426,7 @@ class TennisFeatureEngineering:
         
         try:
             data = pd.read_csv(self.data_path)
+            data['match_date'] = pd.to_datetime(data['match_date'])
             
             for _, row in data.iterrows():
                 player1 = row['player_1']
@@ -230,10 +443,18 @@ class TennisFeatureEngineering:
                         'player1_wins': 0,
                         'player2_wins': 0,
                         'player1_win_pct': 0,
-                        'player2_win_pct': 0
+                        'player2_win_pct': 0,
+                        'surface_stats': {},
+                        'recent_matches': [],
+                        'avg_duration': 0,
+                        'total_duration': 0,
+                        'last_match_date': None,
+                        'first_match_date': None,
+                        'win_streak': 0,
+                        'current_streak_holder': None
                     }
                 
-                # Actualizar estadísticas
+                # Actualizar estadísticas básicas
                 self.head_to_head_stats[player_pair]['total_matches'] += 1
                 
                 if winner == 0:  # Jugador 1 ganó
@@ -247,15 +468,98 @@ class TennisFeatureEngineering:
                     else:
                         self.head_to_head_stats[player_pair]['player2_wins'] += 1
                 
-                # Calcular porcentajes
-                total = self.head_to_head_stats[player_pair]['total_matches']
-                p1_wins = self.head_to_head_stats[player_pair]['player1_wins']
-                p2_wins = self.head_to_head_stats[player_pair]['player2_wins']
+                # Actualizar estadísticas por superficie
+                surface = row['surface']
+                if surface not in self.head_to_head_stats[player_pair]['surface_stats']:
+                    self.head_to_head_stats[player_pair]['surface_stats'][surface] = {
+                        'total_matches': 0,
+                        'player1_wins': 0,
+                        'player2_wins': 0,
+                        'player1_win_pct': 0,
+                        'player2_win_pct': 0
+                    }
                 
-                self.head_to_head_stats[player_pair]['player1_win_pct'] = (p1_wins / total) * 100 if total > 0 else 50
-                self.head_to_head_stats[player_pair]['player2_win_pct'] = (p2_wins / total) * 100 if total > 0 else 50
+                surface_stats = self.head_to_head_stats[player_pair]['surface_stats'][surface]
+                surface_stats['total_matches'] += 1
+                
+                if winner == 0:  # Jugador 1 ganó
+                    if player1 == player_pair[0]:
+                        surface_stats['player1_wins'] += 1
+                    else:
+                        surface_stats['player2_wins'] += 1
+                else:  # Jugador 2 ganó
+                    if player2 == player_pair[0]:
+                        surface_stats['player1_wins'] += 1
+                    else:
+                        surface_stats['player2_wins'] += 1
+                
+                # Actualizar partidos recientes
+                match_info = {
+                    'date': row['match_date'],
+                    'winner': player1 if winner == 0 else player2,
+                    'surface': surface,
+                    'tournament': row['tournament']
+                }
+                self.head_to_head_stats[player_pair]['recent_matches'].append(match_info)
+                
+                # Mantener solo los últimos 10 partidos
+                self.head_to_head_stats[player_pair]['recent_matches'] = sorted(
+                    self.head_to_head_stats[player_pair]['recent_matches'],
+                    key=lambda x: x['date']
+                )[-10:]
+                
+                # Actualizar fechas de primer y último partido
+                match_date = row['match_date']
+                if (self.head_to_head_stats[player_pair]['first_match_date'] is None or 
+                    match_date < self.head_to_head_stats[player_pair]['first_match_date']):
+                    self.head_to_head_stats[player_pair]['first_match_date'] = match_date
+                if (self.head_to_head_stats[player_pair]['last_match_date'] is None or 
+                    match_date > self.head_to_head_stats[player_pair]['last_match_date']):
+                    self.head_to_head_stats[player_pair]['last_match_date'] = match_date
+                
+                # Actualizar duración promedio
+                if 'duration' in row:
+                    self.head_to_head_stats[player_pair]['total_duration'] += row['duration']
+                    self.head_to_head_stats[player_pair]['avg_duration'] = (
+                        self.head_to_head_stats[player_pair]['total_duration'] / 
+                        self.head_to_head_stats[player_pair]['total_matches']
+                    )
+                
+                # Calcular racha actual
+                recent_matches = sorted(
+                    self.head_to_head_stats[player_pair]['recent_matches'],
+                    key=lambda x: x['date']
+                )
+                current_streak = 0
+                current_holder = None
+                
+                for match in reversed(recent_matches):
+                    if current_holder is None:
+                        current_holder = match['winner']
+                        current_streak = 1
+                    elif match['winner'] == current_holder:
+                        current_streak += 1
+                    else:
+                        break
+                
+                self.head_to_head_stats[player_pair]['win_streak'] = current_streak
+                self.head_to_head_stats[player_pair]['current_streak_holder'] = current_holder
             
-            logging.info(f"Estadísticas H2H calculadas para {len(self.head_to_head_stats)} pares de jugadores")
+            # Calcular porcentajes finales
+            for pair_stats in self.head_to_head_stats.values():
+                total_matches = pair_stats['total_matches']
+                if total_matches > 0:
+                    pair_stats['player1_win_pct'] = pair_stats['player1_wins'] / total_matches
+                    pair_stats['player2_win_pct'] = pair_stats['player2_wins'] / total_matches
+                
+                # Calcular porcentajes por superficie
+                for surface_stats in pair_stats['surface_stats'].values():
+                    surface_total = surface_stats['total_matches']
+                    if surface_total > 0:
+                        surface_stats['player1_win_pct'] = surface_stats['player1_wins'] / surface_total
+                        surface_stats['player2_win_pct'] = surface_stats['player2_wins'] / surface_total
+            
+            logging.info(f"Estadísticas head-to-head calculadas para {len(self.head_to_head_stats)} pares de jugadores")
             
         except Exception as e:
             logging.error(f"Error construyendo estadísticas head-to-head: {e}")

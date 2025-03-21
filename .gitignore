@@ -25,7 +25,9 @@ __pycache__/
 *$py.class
 *.so
 .Python
-venv/
+config/
+templates/
+ml-env/
 ENV/
 .env
 
