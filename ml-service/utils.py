@@ -64,44 +64,109 @@ class TennisFeatureEngineering:
             
         Returns:
             DataFrame con características calculadas
+            
+        Raises:
+            ValueError: Si el DataFrame está vacío o no tiene el formato esperado
+            TypeError: Si el input no es un DataFrame
         """
+        if not isinstance(data, pd.DataFrame):
+            raise TypeError("Los datos de entrada deben ser un pandas DataFrame")
+            
+        if data.empty:
+            raise ValueError("El DataFrame está vacío")
+            
         try:
-            features = pd.DataFrame()
+            features = pd.DataFrame(index=data.index)
             
-            # Características básicas
-            features['ranking_diff'] = data['winner_rank'] - data['loser_rank']
-            features['age_diff'] = data['winner_age'] - data['loser_age']
-            features['height_diff'] = data['winner_ht'] - data['loser_ht']
+            # Lista de características a procesar con sus columnas requeridas
+            feature_configs = {
+                'ranking': {
+                    'columns': ['ranking_1', 'ranking_2'],
+                    'features': {
+                        'ranking_diff': lambda x: x['ranking_1'] - x['ranking_2'],
+                        'ranking_ratio': lambda x: x['ranking_1'] / np.where(x['ranking_2'] == 0, 1, x['ranking_2'])
+                    }
+                },
+                'elo': {
+                    'columns': ['elo_winner', 'elo_loser'],
+                    'features': {
+                        'elo_diff': lambda x: x['elo_winner'] - x['elo_loser'],
+                        'elo_ratio': lambda x: x['elo_winner'] / np.where(x['elo_loser'] == 0, 1, x['elo_loser'])
+                    }
+                },
+                'elo_surface': {
+                    'columns': ['elo_winner_surface', 'elo_loser_surface'],
+                    'features': {
+                        'elo_surface_diff': lambda x: x['elo_winner_surface'] - x['elo_loser_surface'],
+                        'elo_surface_ratio': lambda x: x['elo_winner_surface'] / np.where(x['elo_loser_surface'] == 0, 1, x['elo_loser_surface'])
+                    }
+                }
+            }
             
-            # Características de superficie
-            features['surface_advantage'] = self._calculate_surface_advantage(data)
+            # Procesar cada grupo de características
+            for feature_group, config in feature_configs.items():
+                if all(col in data.columns for col in config['columns']):
+                    for feature_name, feature_func in config['features'].items():
+                        try:
+                            features[feature_name] = feature_func(data)
+                            logging.debug(f"Característica {feature_name} calculada exitosamente")
+                        except Exception as e:
+                            logging.warning(f"Error calculando {feature_name}: {str(e)}")
+                            features[feature_name] = 0
+                else:
+                    missing_cols = [col for col in config['columns'] if col not in data.columns]
+                    logging.warning(f"Columnas faltantes para {feature_group}: {missing_cols}")
             
-            # Características de forma reciente
-            features['recent_form'] = self._calculate_recent_form(data)
+            # Características simples (una sola columna)
+            simple_features = [
+                'surface_winrate_diff', 'winrate_diff', 'fatigue_diff',
+                'physical_advantage', 'temporal_advantage', 'tournament_experience_diff',
+                'h2h_advantage', 'momentum_diff', 'rest_advantage', 'time_of_day_advantage'
+            ]
             
-            # Características de fatiga
-            features['fatigue'] = self._calculate_fatigue(data)
+            for feature in simple_features:
+                if feature in data.columns:
+                    features[feature] = data[feature]
+                    logging.debug(f"Característica {feature} copiada exitosamente")
             
-            # Características head-to-head
-            features['h2h_advantage'] = self._calculate_h2h_advantage(data)
+            # Validar que tengamos al menos una característica
+            if features.empty:
+                logging.warning("No se encontraron características disponibles. Creando columna dummy.")
+                features['dummy'] = 0
             
-            # Nuevas características contextuales
-            features['physical_advantage'] = self._calculate_physical_advantage(data)
-            features['tournament_experience'] = self._calculate_tournament_experience(data)
-            features['momentum'] = self._calculate_momentum(data)
+            # Rellenar valores nulos con la mediana de cada columna
+            for col in features.columns:
+                if features[col].isnull().any():
+                    median_value = features[col].median()
+                    features[col] = features[col].fillna(median_value)
+                    logging.info(f"Valores nulos en {col} rellenados con la mediana: {median_value}")
             
-            # Nuevas características temporales
-            features['seasonal_advantage'] = self._calculate_seasonal_advantage(data)
-            features['rest_advantage'] = self._calculate_rest_advantage(data)
-            features['time_of_day_advantage'] = self._calculate_time_of_day_advantage(data)
+            # Detectar y manejar valores extremos
+            for col in features.columns:
+                if col != 'dummy':
+                    Q1 = features[col].quantile(0.25)
+                    Q3 = features[col].quantile(0.75)
+                    IQR = Q3 - Q1
+                    lower_bound = Q1 - 1.5 * IQR
+                    upper_bound = Q3 + 1.5 * IQR
+                    
+                    outliers = ((features[col] < lower_bound) | (features[col] > upper_bound))
+                    if outliers.any():
+                        n_outliers = outliers.sum()
+                        features.loc[outliers, col] = features[col].clip(lower_bound, upper_bound)
+                        logging.info(f"Se detectaron y corrigieron {n_outliers} valores extremos en {col}")
             
             # Normalizar características
             features = self._normalize_features(features)
             
+            # Validación final
+            if features.isnull().any().any():
+                raise ValueError("Hay valores nulos en las características después del procesamiento")
+                
             return features
             
         except Exception as e:
-            logging.error(f"Error extrayendo características: {e}")
+            logging.error(f"Error en la extracción de características: {str(e)}")
             raise
     
     def _calculate_surface_advantage(self, data: pd.DataFrame) -> pd.Series:
@@ -122,12 +187,54 @@ class TennisFeatureEngineering:
             data['loser_recent_wins'] / (data['loser_recent_matches'] + 1)
         )
     
-    def _calculate_fatigue(self, data: pd.DataFrame) -> pd.Series:
-        """Calcula el nivel de fatiga de los jugadores."""
-        return (
-            data['winner_matches_played'] / (data['winner_days_rest'] + 1) -
-            data['loser_matches_played'] / (data['loser_days_rest'] + 1)
-        )
+    def _calculate_fatigue(self, match_data: dict) -> float:
+        """
+        Calcula el nivel de fatiga de los jugadores.
+        
+        Args:
+            match_data: Diccionario con datos del partido
+            
+        Returns:
+            Diferencia de fatiga entre jugadores
+        """
+        try:
+            player1 = match_data.get('player_1', match_data.get('player1', ''))
+            player2 = match_data.get('player_2', match_data.get('player2', ''))
+            match_date = match_data.get('date')
+            
+            if not match_date or not player1 or not player2:
+                return 0.0
+            
+            # Obtener estadísticas de partidos recientes
+            p1_stats = self.players_stats.get(player1, {})
+            p2_stats = self.players_stats.get(player2, {})
+            
+            # Calcular días de descanso
+            p1_last_match = p1_stats.get('last_match_date')
+            p2_last_match = p2_stats.get('last_match_date')
+            
+            if not p1_last_match or not p2_last_match:
+                return 0.0
+            
+            p1_rest = (match_date - p1_last_match).days
+            p2_rest = (match_date - p2_last_match).days
+            
+            # Calcular partidos jugados en los últimos 30 días
+            p1_recent_matches = p1_stats.get('recent_matches', [])
+            p2_recent_matches = p2_stats.get('recent_matches', [])
+            
+            p1_matches = len([m for m in p1_recent_matches if (match_date - m['date']).days <= 30])
+            p2_matches = len([m for m in p2_recent_matches if (match_date - m['date']).days <= 30])
+            
+            # Calcular fatiga
+            p1_fatigue = p1_matches / (p1_rest + 1)
+            p2_fatigue = p2_matches / (p2_rest + 1)
+            
+            return p1_fatigue - p2_fatigue
+            
+        except Exception as e:
+            logging.error(f"Error calculando fatiga: {str(e)}")
+            return 0.0
     
     def _calculate_h2h_advantage(self, data: pd.DataFrame) -> pd.Series:
         """Calcula la ventaja head-to-head."""
@@ -136,45 +243,58 @@ class TennisFeatureEngineering:
             data['loser_h2h_wins'] / (data['winner_h2h_wins'] + data['loser_h2h_wins'] + 1)
         )
     
-    def _calculate_physical_advantage(self, data: pd.DataFrame) -> pd.Series:
-        """Calcula ventajas físicas entre jugadores."""
-        physical_advantage = pd.Series(0, index=data.index)
+    def _calculate_physical_advantage(self, match_data: dict) -> float:
+        """
+        Calcula ventajas físicas entre jugadores.
         
-        # Ventaja de altura (más importante en superficies rápidas)
-        height_advantage = data['winner_ht'] - data['loser_ht']
-        surface_speed_factor = data['surface'].map({
-            'Hard': 1.0,
-            'Clay': 0.5,
-            'Grass': 1.2,
-            'Carpet': 1.1
-        })
-        
-        # Ventaja de edad (experiencia vs juventud)
-        age_advantage = np.where(
-            data['winner_age'] > data['loser_age'],
-            0.5,  # Experiencia
-            -0.5  # Juventud
-        )
-        
-        # Ventaja de mano dominante
-        hand_advantage = np.where(
-            data['winner_hand'] == data['loser_hand'],
-            0,  # Misma mano
-            np.where(
-                data['winner_hand'] == 'R',
-                0.3,  # Ventaja para diestros
-                -0.3  # Ventaja para zurdos
-            )
-        )
-        
-        physical_advantage = (
-            height_advantage * surface_speed_factor +
-            age_advantage +
-            hand_advantage
-        )
-        
-        return physical_advantage
-
+        Args:
+            match_data: Diccionario con datos del partido
+            
+        Returns:
+            Ventaja física entre jugadores
+        """
+        try:
+            player1 = match_data.get('player_1', match_data.get('player1', ''))
+            player2 = match_data.get('player_2', match_data.get('player2', ''))
+            surface = match_data.get('surface', 'hard').lower()
+            
+            if not player1 or not player2:
+                return 0.0
+            
+            # Obtener estadísticas de jugadores
+            p1_stats = self.players_stats.get(player1, {})
+            p2_stats = self.players_stats.get(player2, {})
+            
+            # Ventaja de altura (más importante en superficies rápidas)
+            p1_height = p1_stats.get('height', 180)
+            p2_height = p2_stats.get('height', 180)
+            height_diff = p1_height - p2_height
+            
+            # Factor de superficie
+            surface_speed = {
+                'hard': 1.0,
+                'clay': 0.5,
+                'grass': 1.2,
+                'carpet': 0.8
+            }.get(surface, 1.0)
+            
+            # Ventaja de peso (más importante en superficies lentas)
+            p1_weight = p1_stats.get('weight', 75)
+            p2_weight = p2_stats.get('weight', 75)
+            weight_diff = p1_weight - p2_weight
+            
+            # Calcular ventaja física total
+            physical_advantage = (
+                height_diff * surface_speed +
+                weight_diff * (1 - surface_speed)
+            ) / 100  # Normalizar a un rango razonable
+            
+            return physical_advantage
+            
+        except Exception as e:
+            logging.error(f"Error calculando ventaja física: {str(e)}")
+            return 0.0
+    
     def _calculate_tournament_experience(self, data: pd.DataFrame) -> pd.Series:
         """Calcula la experiencia en el torneo actual."""
         tournament_experience = pd.Series(0, index=data.index)
@@ -240,44 +360,189 @@ class TennisFeatureEngineering:
             
         return seasonal_advantage
 
-    def _calculate_rest_advantage(self, data: pd.DataFrame) -> pd.Series:
-        """Calcula la ventaja por días de descanso."""
-        rest_advantage = pd.Series(0, index=data.index)
+    def _calculate_rest_advantage(self, match_data: dict) -> float:
+        """
+        Calcula la ventaja de descanso entre jugadores.
         
-        for idx, row in data.iterrows():
-            winner = row['player_1']
-            loser = row['player_2']
+        Args:
+            match_data: Diccionario con datos del partido
             
-            # Obtener días de descanso
-            winner_rest = self.players_stats.get(winner, {}).get('days_rest', 0)
-            loser_rest = self.players_stats.get(loser, {}).get('days_rest', 0)
+        Returns:
+            Ventaja de descanso entre jugadores
+        """
+        try:
+            player1 = match_data.get('player_1', match_data.get('player1', ''))
+            player2 = match_data.get('player_2', match_data.get('player2', ''))
+            match_date = match_data.get('date')
             
-            # Calcular ventaja de descanso (con penalización por demasiado descanso)
-            winner_rest_advantage = min(winner_rest, 7) / 7  # Máximo 7 días de ventaja
-            loser_rest_advantage = min(loser_rest, 7) / 7
+            if not match_date or not player1 or not player2:
+                return 0.0
             
-            rest_advantage[idx] = winner_rest_advantage - loser_rest_advantage
+            # Obtener estadísticas de jugadores
+            p1_stats = self.players_stats.get(player1, {})
+            p2_stats = self.players_stats.get(player2, {})
             
-        return rest_advantage
-
-    def _calculate_time_of_day_advantage(self, data: pd.DataFrame) -> pd.Series:
-        """Calcula ventajas basadas en la hora del día."""
-        time_advantage = pd.Series(0, index=data.index)
+            # Calcular días de descanso
+            p1_last_match = p1_stats.get('last_match_date')
+            p2_last_match = p2_stats.get('last_match_date')
+            
+            if not p1_last_match or not p2_last_match:
+                return 0.0
+            
+            p1_rest = (match_date - p1_last_match).days
+            p2_rest = (match_date - p2_last_match).days
+            
+            # Calcular ventaja de descanso
+            rest_advantage = p1_rest - p2_rest
+            
+            # Normalizar a un rango razonable
+            return rest_advantage / 7  # Dividir por 7 para normalizar a semanas
+            
+        except Exception as e:
+            logging.error(f"Error calculando ventaja de descanso: {str(e)}")
+            return 0.0
+    
+    def _calculate_time_of_day_advantage(self, match_data: dict) -> float:
+        """
+        Calcula la ventaja por hora del día.
         
-        for idx, row in data.iterrows():
-            match_time = pd.to_datetime(row['match_date']).hour
+        Args:
+            match_data: Diccionario con datos del partido
             
-            # Obtener preferencias de hora de los jugadores
-            winner_time_pref = self.players_stats.get(row['player_1'], {}).get('time_preferences', {})
-            loser_time_pref = self.players_stats.get(row['player_2'], {}).get('time_preferences', {})
+        Returns:
+            Ventaja por hora del día
+        """
+        try:
+            match_time = match_data.get('time')
+            if not match_time:
+                return 0.0
             
-            # Calcular ventaja por hora
-            winner_hour_perf = winner_time_pref.get(match_time, 0.5)
-            loser_hour_perf = loser_time_pref.get(match_time, 0.5)
+            # Convertir hora a formato 24h
+            hour = int(match_time.split(':')[0])
             
-            time_advantage[idx] = winner_hour_perf - loser_hour_perf
+            # Ventajas por hora del día
+            # Mañana (8-12): Ventaja para jugadores que prefieren jugar temprano
+            # Tarde (12-18): Hora neutral
+            # Noche (18-22): Ventaja para jugadores que prefieren jugar tarde
+            if 8 <= hour < 12:
+                return 0.3  # Ventaja para jugadores de mañana
+            elif 12 <= hour < 18:
+                return 0.0  # Hora neutral
+            else:
+                return -0.3  # Ventaja para jugadores de noche
             
-        return time_advantage
+        except Exception as e:
+            logging.error(f"Error calculando ventaja por hora del día: {str(e)}")
+            return 0.0
+    
+    def _calculate_seasonal_advantage(self, match_data: dict) -> float:
+        """
+        Calcula la ventaja estacional.
+        
+        Args:
+            match_data: Diccionario con datos del partido
+            
+        Returns:
+            Ventaja estacional
+        """
+        try:
+            match_date = match_data.get('date')
+            if not match_date:
+                return 0.0
+            
+            # Obtener mes del partido
+            month = match_date.month
+            
+            # Ventajas por temporada
+            # Temporada de hierba (junio-julio): Ventaja para jugadores de hierba
+            # Temporada de tierra batida (abril-mayo): Ventaja para jugadores de tierra
+            # Temporada de pista dura (enero-marzo, agosto-diciembre): Ventaja para jugadores de pista dura
+            if 6 <= month <= 7:  # Temporada de hierba
+                return 0.3  # Ventaja para jugadores de hierba
+            elif 4 <= month <= 5:  # Temporada de tierra
+                return -0.3  # Ventaja para jugadores de tierra
+            else:  # Temporada de pista dura
+                return 0.0  # Hora neutral
+            
+        except Exception as e:
+            logging.error(f"Error calculando ventaja estacional: {str(e)}")
+            return 0.0
+    
+    def _calculate_tournament_experience(self, match_data: dict) -> float:
+        """
+        Calcula la diferencia de experiencia en el torneo.
+        
+        Args:
+            match_data: Diccionario con datos del partido
+            
+        Returns:
+            Diferencia de experiencia en el torneo
+        """
+        try:
+            player1 = match_data.get('player_1', match_data.get('player1', ''))
+            player2 = match_data.get('player_2', match_data.get('player2', ''))
+            tournament = match_data.get('tournament', '')
+            
+            if not player1 or not player2 or not tournament:
+                return 0.0
+            
+            # Obtener estadísticas de jugadores
+            p1_stats = self.players_stats.get(player1, {})
+            p2_stats = self.players_stats.get(player2, {})
+            
+            # Obtener experiencia en el torneo
+            p1_tournament_matches = p1_stats.get('tournament_stats', {}).get(tournament, {}).get('total_matches', 0)
+            p2_tournament_matches = p2_stats.get('tournament_stats', {}).get(tournament, {}).get('total_matches', 0)
+            
+            # Calcular diferencia de experiencia
+            experience_diff = p1_tournament_matches - p2_tournament_matches
+            
+            # Normalizar a un rango razonable
+            return experience_diff / 10  # Dividir por 10 para normalizar
+            
+        except Exception as e:
+            logging.error(f"Error calculando experiencia en torneo: {str(e)}")
+            return 0.0
+    
+    def _calculate_momentum(self, match_data: dict) -> float:
+        """
+        Calcula la diferencia de momentum entre jugadores.
+        
+        Args:
+            match_data: Diccionario con datos del partido
+            
+        Returns:
+            Diferencia de momentum entre jugadores
+        """
+        try:
+            player1 = match_data.get('player_1', match_data.get('player1', ''))
+            player2 = match_data.get('player_2', match_data.get('player2', ''))
+            match_date = match_data.get('date')
+            
+            if not match_date or not player1 or not player2:
+                return 0.0
+            
+            # Obtener estadísticas de jugadores
+            p1_stats = self.players_stats.get(player1, {})
+            p2_stats = self.players_stats.get(player2, {})
+            
+            # Obtener partidos recientes
+            p1_recent_matches = p1_stats.get('recent_matches', [])
+            p2_recent_matches = p2_stats.get('recent_matches', [])
+            
+            # Calcular racha de victorias en los últimos 5 partidos
+            p1_wins = sum(1 for m in p1_recent_matches[:5] if m['winner'] == player1)
+            p2_wins = sum(1 for m in p2_recent_matches[:5] if m['winner'] == player2)
+            
+            # Calcular diferencia de momentum
+            momentum_diff = p1_wins - p2_wins
+            
+            # Normalizar a un rango razonable
+            return momentum_diff / 5  # Dividir por 5 para normalizar
+            
+        except Exception as e:
+            logging.error(f"Error calculando momentum: {str(e)}")
+            return 0.0
     
     def _normalize_features(self, features: pd.DataFrame) -> pd.DataFrame:
         """Normaliza las características usando StandardScaler."""
@@ -575,15 +840,16 @@ class TennisFeatureEngineering:
             DataFrame con características para el modelo
         """
         try:
-            # Extraer datos
+            # Extraer datos básicos
             player1 = match_data.get('player_1', match_data.get('player1', ''))
             player2 = match_data.get('player_2', match_data.get('player2', ''))
             surface = match_data.get('surface', 'hard').lower()
+            match_date = match_data.get('date')
             
             # Preparar características
             features = {}
             
-            # Ranking
+            # Ranking y ELO
             ranking1 = match_data.get('ranking_1')
             if ranking1 is None and player1 in self.players_stats:
                 ranking1 = self.players_stats[player1].get('avg_ranking', 100)
@@ -598,7 +864,38 @@ class TennisFeatureEngineering:
             
             features['ranking_1'] = ranking1
             features['ranking_2'] = ranking2
-            features['ranking_diff'] = ranking1 - ranking2
+            
+            # ELO ratings
+            elo1 = match_data.get('elo_1')
+            if elo1 is None and player1 in self.players_stats:
+                elo1 = self.players_stats[player1].get('elo_rating', 1500)
+            elif elo1 is None:
+                elo1 = 1500
+            
+            elo2 = match_data.get('elo_2')
+            if elo2 is None and player2 in self.players_stats:
+                elo2 = self.players_stats[player2].get('elo_rating', 1500)
+            elif elo2 is None:
+                elo2 = 1500
+            
+            features['elo_winner'] = elo1
+            features['elo_loser'] = elo2
+            
+            # ELO por superficie
+            elo_surface1 = match_data.get('elo_surface_1')
+            if elo_surface1 is None and player1 in self.players_stats:
+                elo_surface1 = self.players_stats[player1].get('surface_elo', {}).get(surface, elo1)
+            elif elo_surface1 is None:
+                elo_surface1 = elo1
+            
+            elo_surface2 = match_data.get('elo_surface_2')
+            if elo_surface2 is None and player2 in self.players_stats:
+                elo_surface2 = self.players_stats[player2].get('surface_elo', {}).get(surface, elo2)
+            elif elo_surface2 is None:
+                elo_surface2 = elo2
+            
+            features['elo_winner_surface'] = elo_surface1
+            features['elo_loser_surface'] = elo_surface2
             
             # Tasas de victoria
             winrate1 = match_data.get('winrate_1')
@@ -638,40 +935,44 @@ class TennisFeatureEngineering:
             player_pair = tuple(sorted([player1, player2]))
             if player_pair in self.head_to_head_stats:
                 h2h = self.head_to_head_stats[player_pair]
+                features['h2h_advantage'] = h2h.get('player1_win_pct', 0.5) - h2h.get('player2_win_pct', 0.5)
+                features['h2h_matches'] = h2h.get('total_matches', 0)
                 
-                # Determinar quién es quién en las estadísticas H2H
-                if player1 == player_pair[0]:
-                    features['p1_h2h_wins'] = h2h['player1_wins']
-                    features['p2_h2h_wins'] = h2h['player2_wins']
-                    features['p1_h2h_winrate'] = h2h['player1_win_pct']
-                    features['p2_h2h_winrate'] = h2h['player2_win_pct']
-                else:
-                    features['p1_h2h_wins'] = h2h['player2_wins']
-                    features['p2_h2h_wins'] = h2h['player1_wins']
-                    features['p1_h2h_winrate'] = h2h['player2_win_pct']
-                    features['p2_h2h_winrate'] = h2h['player1_win_pct']
-                
-                features['h2h_diff'] = features['p1_h2h_winrate'] - features['p2_h2h_winrate']
+                # Head-to-head por superficie
+                surface_h2h = h2h.get('surface_stats', {}).get(surface, {})
+                features['h2h_surface_advantage'] = surface_h2h.get('player1_win_pct', 0.5) - surface_h2h.get('player2_win_pct', 0.5)
             else:
-                features['p1_h2h_wins'] = 0
-                features['p2_h2h_wins'] = 0
-                features['p1_h2h_winrate'] = 50
-                features['p2_h2h_winrate'] = 50
-                features['h2h_diff'] = 0
+                features['h2h_advantage'] = 0
+                features['h2h_matches'] = 0
+                features['h2h_surface_advantage'] = 0
+            
+            # Fatiga y descanso
+            if match_date:
+                features['fatigue_diff'] = self._calculate_fatigue(match_data)
+                features['rest_advantage'] = self._calculate_rest_advantage(match_data)
+            
+            # Características físicas
+            features['physical_advantage'] = self._calculate_physical_advantage(match_data)
+            
+            # Características temporales
+            if match_date:
+                features['temporal_advantage'] = self._calculate_time_of_day_advantage(match_data)
+                features['seasonal_advantage'] = self._calculate_seasonal_advantage(match_data)
+            
+            # Experiencia en torneo
+            features['tournament_experience_diff'] = self._calculate_tournament_experience(match_data)
+            
+            # Momentum
+            features['momentum_diff'] = self._calculate_momentum(match_data)
             
             # Convertir a DataFrame
-            return pd.DataFrame([features])
+            df_features = pd.DataFrame([features])
+            
+            return df_features
             
         except Exception as e:
-            logging.error(f"Error transformando datos del partido: {e}")
-            # Datos mínimos si hay error
-            return pd.DataFrame([{
-                'ranking_1': match_data.get('ranking_1', 100),
-                'ranking_2': match_data.get('ranking_2', 100),
-                'winrate_1': match_data.get('winrate_1', 50),
-                'winrate_2': match_data.get('winrate_2', 50),
-                'surface_code': {'hard': 0, 'clay': 1, 'grass': 2}.get(match_data.get('surface', 'hard').lower(), 0)
-            }])
+            logging.error(f"Error transformando datos del partido: {str(e)}")
+            raise
     
     def _get_external_ranking(self, player):
         """Método para obtener ranking desde fuentes externas."""

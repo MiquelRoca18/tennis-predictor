@@ -30,6 +30,10 @@ from data_collector import TennisDataCollector
 from tenacity import retry, stop_after_attempt, wait_exponential
 from pathlib import Path
 from io import StringIO
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+import argparse
+import sys
 
 # Crear directorio de logs si no existe
 os.makedirs('logs', exist_ok=True)
@@ -353,6 +357,11 @@ class AdvancedTennisDataCollector(TennisDataCollector):
         self.enriched_dir = self.data_dir / 'enriched'
         self.enriched_dir.mkdir(exist_ok=True)
         
+        self.config = {
+            'base_url': 'https://www.tennisexplorer.com',
+            'api_key': os.getenv('TENNIS_EXPLORER_API_KEY', None)
+        }
+        
         logger.info("Inicializado colector de datos avanzado")
     
     def _configure_paid_apis(self):
@@ -406,37 +415,140 @@ class AdvancedTennisDataCollector(TennisDataCollector):
             }
         }
     
-    def collect_enriched_data(self, output_path: str) -> Optional[pd.DataFrame]:
+    def collect_enriched_data(self, output_path: str, start_year: int, end_year: int) -> pd.DataFrame:
         """
-        Recopila y enriquece datos de partidos de tenis.
+        Recopila datos enriquecidos de tenis.
         
         Args:
-            output_path: Ruta donde guardar los datos enriquecidos
+            output_path: Ruta donde guardar los datos
+            start_year: Año inicial
+            end_year: Año final
             
         Returns:
-            DataFrame con datos enriquecidos o None si hay error
+            DataFrame con datos enriquecidos
         """
         try:
-            logger.info("Iniciando recopilación de datos enriquecidos...")
-            
             # Recopilar datos básicos
-            basic_data = self.collect_data(self.start_year, self.end_year)
-            if basic_data is None or basic_data.empty:
-                logger.error("No se pudieron recopilar datos básicos")
-                return None
+            basic_data = self.collect_data(start_year, end_year)
             
-            # Enriquecer datos con APIs pagadas
-            enriched_data = self._enrich_with_paid_apis(basic_data)
+            if basic_data.empty:
+                logger.error("No se pudieron recopilar datos básicos")
+                return pd.DataFrame()
+                
+            logger.info(f"Columnas disponibles en basic_data: {basic_data.columns.tolist()}")
+            
+            # Enriquecer datos con Jeff Sackmann
+            enriched_data = self._enrich_with_jeff_sackmann(basic_data)
+            
+            # Asegurar que todas las columnas estén presentes con los tipos correctos
+            required_columns = {
+                # Columnas básicas
+                'match_id': str,
+                'tournament_id': str,
+                'player1_id': str,
+                'player2_id': str,
+                'player1_name': str,
+                'player2_name': str,
+                'match_date': str,
+                'surface': str,
+                'tournament_name': str,
+                'tournament_category': str,
+                'winner_id': str,
+                'score': str,
+                'sets_played': int,
+                'minutes': int,
+                'round': str,
+                'draw_size': int,
+                'year': int,
+                
+                # Estadísticas de servicio del ganador
+                'winner_ace': float,
+                'winner_df': float,
+                'winner_svpt': float,
+                'winner_1stIn': float,
+                'winner_1stWon': float,
+                'winner_2ndWon': float,
+                'winner_SvGms': float,
+                'winner_bpSaved': float,
+                'winner_bpFaced': float,
+                'winner_rank': float,
+                'winner_rank_points': float,
+                
+                # Estadísticas de servicio del perdedor
+                'loser_ace': float,
+                'loser_df': float,
+                'loser_svpt': float,
+                'loser_1stIn': float,
+                'loser_1stWon': float,
+                'loser_2ndWon': float,
+                'loser_SvGms': float,
+                'loser_bpSaved': float,
+                'loser_bpFaced': float,
+                'loser_rank': float,
+                'loser_rank_points': float,
+                
+                # Características físicas
+                'winner_ht': float,
+                'winner_age': float,
+                'winner_hand': str,
+                'loser_ht': float,
+                'loser_age': float,
+                'loser_hand': str,
+                
+                # Información adicional del torneo
+                'tourney_level': str,
+                'best_of': int,
+                
+                # Información de los jugadores
+                'winner_seed': str,
+                'winner_entry': str,
+                'winner_ioc': str,
+                'loser_seed': str,
+                'loser_entry': str,
+                'loser_ioc': str,
+                
+                # Características temporales
+                'days_since_last_match': int
+            }
+            
+            # Inicializar columnas faltantes con valores por defecto según el tipo
+            for col, dtype in required_columns.items():
+                if col not in enriched_data.columns:
+                    if dtype in [str]:
+                        enriched_data[col] = ''
+                    elif dtype in [int]:
+                        enriched_data[col] = 0
+                    elif dtype in [float]:
+                        enriched_data[col] = 0.0
+                    else:
+                        enriched_data[col] = None
+            
+            # Convertir tipos de datos
+            for col, dtype in required_columns.items():
+                if col in enriched_data.columns:
+                    try:
+                        enriched_data[col] = enriched_data[col].astype(dtype)
+                    except Exception as e:
+                        logger.error(f"Error convirtiendo columna {col} a tipo {dtype}: {str(e)}")
+                        continue
             
             # Guardar datos enriquecidos
             enriched_data.to_csv(output_path, index=False)
-            logger.info(f"Datos enriquecidos guardados en {output_path}")
+            logger.info(f"Datos guardados en {output_path}")
+            
+            # Mostrar estadísticas
+            logger.info(f"Total de partidos: {len(enriched_data)}")
+            logger.info(f"Rango de fechas: {enriched_data['match_date'].min()} - {enriched_data['match_date'].max()}")
+            logger.info(f"Tipos de torneos: {enriched_data['tournament_category'].unique()}")
+            logger.info(f"Total de torneos únicos: {enriched_data['tournament_id'].nunique()}")
+            logger.info(f"Total de jugadores únicos: {enriched_data['player1_id'].nunique() + enriched_data['player2_id'].nunique()}")
             
             return enriched_data
             
         except Exception as e:
-            logger.error(f"Error en recopilación de datos enriquecidos: {str(e)}")
-            return None
+            logger.error(f"Error en collect_enriched_data: {str(e)}")
+            logger.error(traceback.format_exc())
+            return pd.DataFrame()
     
     def _enrich_with_paid_apis(self, data: pd.DataFrame) -> pd.DataFrame:
         """
@@ -543,356 +655,8 @@ class AdvancedTennisDataCollector(TennisDataCollector):
     
     def _enrich_with_ultimate_tennis(self, data: pd.DataFrame) -> pd.DataFrame:
         """
-        Enriquece datos usando Ultimate Tennis Statistics (API gratuita).
-        
-        Args:
-            data: DataFrame con datos básicos
-            
-        Returns:
-            DataFrame enriquecido con datos de Ultimate Tennis Statistics
-        """
-        try:
-            enriched_data = data.copy()
-            base_url = 'https://www.ultimatetennisstatistics.com/api'
-            
-            # Crear sesión para la API
-            session = requests.Session()
-            session.headers.update({
-                'User-Agent': self.user_agent,
-                'Accept': 'application/json'
-            })
-            
-            # Procesar cada partido
-            for idx, row in enriched_data.iterrows():
-                try:
-                    match_id = row['match_id']
-                    match_url = f"{base_url}/matches/{match_id}.json"
-                    response = session.get(match_url)
-                    response.raise_for_status()
-                    match_data = response.json()
-                    
-                    # Extraer estadísticas avanzadas
-                    if 'advanced_stats' in match_data:
-                        stats = match_data['advanced_stats']
-                        enriched_data.at[idx, 'avg_rally_length'] = stats.get('avg_rally_length', 0)
-                        enriched_data.at[idx, 'winners_1'] = stats.get('winners_1', 0)
-                        enriched_data.at[idx, 'winners_2'] = stats.get('winners_2', 0)
-                        enriched_data.at[idx, 'unforced_errors_1'] = stats.get('unforced_errors_1', 0)
-                        enriched_data.at[idx, 'unforced_errors_2'] = stats.get('unforced_errors_2', 0)
-                    
-                    # Esperar para respetar límites de tasa
-                    time.sleep(1)
-                    
-                except Exception as e:
-                    logger.warning(f"Error procesando partido {match_id} en Ultimate Tennis: {str(e)}")
-                    continue
-            
-            logger.info("Enriquecimiento con Ultimate Tennis Statistics completado")
-            return enriched_data
-            
-        except Exception as e:
-            logger.error(f"Error en enriquecimiento con Ultimate Tennis Statistics: {str(e)}")
-            return data
-    
-    def _validate_data(self, data: pd.DataFrame) -> bool:
-        """Valida los datos según las reglas configuradas."""
-        try:
-            # Verificar campos requeridos
-            for field in self.validation_rules['required_fields']:
-                if field not in data.columns:
-                    logger.error(f"Campo requerido no encontrado: {field}")
-                    return False
-            
-            # Verificar campos numéricos
-            for field in self.validation_rules['numeric_fields']:
-                if field in data.columns:
-                    if not pd.to_numeric(data[field], errors='coerce').notna().all():
-                        logger.error(f"Campo numérico inválido: {field}")
-                        return False
-            
-            # Verificar fechas
-            for field in self.validation_rules['date_fields']:
-                if field in data.columns:
-                    if not pd.to_datetime(data[field], errors='coerce').notna().all():
-                        logger.error(f"Campo de fecha inválido: {field}")
-                        return False
-            
-            # Verificar categorías
-            for field, valid_values in self.validation_rules['valid_categories'].items():
-                if field in data.columns:
-                    if callable(valid_values):
-                        if not data[field].apply(valid_values).all():
-                            logger.error(f"Valores inválidos en campo: {field}")
-                            return False
-                    else:
-                        if not data[field].isin(valid_values).all():
-                            logger.error(f"Valores inválidos en campo: {field}")
-                            return False
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error en validación de datos: {str(e)}")
-            return False
-    
-    def _enrich_with_sportradar(self, data: pd.DataFrame, api_config: Dict) -> pd.DataFrame:
-        """
-        Enriquece datos con la API de Sportradar.
-        
-        Args:
-            data: DataFrame con datos básicos
-            api_config: Configuración de la API
-            
-        Returns:
-            DataFrame enriquecido con datos de Sportradar
-        """
-        try:
-            enriched_data = data.copy()
-            base_url = api_config['base_url']
-            api_key = api_config['key']
-            
-            # Crear sesión para la API
-            session = requests.Session()
-            session.headers.update({
-                'Authorization': f'Bearer {api_key}',
-                'Accept': 'application/json'
-            })
-            
-            # Procesar cada partido
-            for idx, row in enriched_data.iterrows():
-                try:
-                    # Obtener detalles del partido
-                    match_id = row['match_id']
-                    match_url = f"{base_url}/matches/{match_id}/summary.json"
-                    response = session.get(match_url)
-                    response.raise_for_status()
-                    match_data = response.json()
-                    
-                    # Extraer estadísticas detalladas
-                    if 'statistics' in match_data:
-                        stats = match_data['statistics']
-                        
-                        # Estadísticas de servicio
-                        enriched_data.at[idx, 'first_serve_percentage_1'] = stats.get('first_serve_percentage_1', 0)
-                        enriched_data.at[idx, 'first_serve_percentage_2'] = stats.get('first_serve_percentage_2', 0)
-                        enriched_data.at[idx, 'aces_1'] = stats.get('aces_1', 0)
-                        enriched_data.at[idx, 'aces_2'] = stats.get('aces_2', 0)
-                        enriched_data.at[idx, 'double_faults_1'] = stats.get('double_faults_1', 0)
-                        enriched_data.at[idx, 'double_faults_2'] = stats.get('double_faults_2', 0)
-                        
-                        # Estadísticas de puntos
-                        enriched_data.at[idx, 'service_points_won_1'] = stats.get('service_points_won_1', 0)
-                        enriched_data.at[idx, 'service_points_won_2'] = stats.get('service_points_won_2', 0)
-                        enriched_data.at[idx, 'return_points_won_1'] = stats.get('return_points_won_1', 0)
-                        enriched_data.at[idx, 'return_points_won_2'] = stats.get('return_points_won_2', 0)
-                        
-                        # Estadísticas de break
-                        enriched_data.at[idx, 'break_points_won_1'] = stats.get('break_points_won_1', 0)
-                        enriched_data.at[idx, 'break_points_won_2'] = stats.get('break_points_won_2', 0)
-                        enriched_data.at[idx, 'break_points_faced_1'] = stats.get('break_points_faced_1', 0)
-                        enriched_data.at[idx, 'break_points_faced_2'] = stats.get('break_points_faced_2', 0)
-                    
-                    # Obtener datos de los jugadores
-                    for player_num in [1, 2]:
-                        player_id = row[f'player{player_num}_id']
-                        player_url = f"{base_url}/players/{player_id}/profile.json"
-                        response = session.get(player_url)
-                        response.raise_for_status()
-                        player_data = response.json()
-                        
-                        # Estadísticas del jugador
-                        if 'statistics' in player_data:
-                            player_stats = player_data['statistics']
-                            enriched_data.at[idx, f'player{player_num}_rank'] = player_stats.get('rank', 0)
-                            enriched_data.at[idx, f'player{player_num}_win_rate'] = player_stats.get('win_rate', 0)
-                            enriched_data.at[idx, f'player{player_num}_surface_stats'] = json.dumps(player_stats.get('surface_stats', {}))
-                    
-                    # Obtener datos del torneo
-                    tournament_id = row['tournament_id']
-                    tournament_url = f"{base_url}/tournaments/{tournament_id}/info.json"
-                    response = session.get(tournament_url)
-                    response.raise_for_status()
-                    tournament_data = response.json()
-                    
-                    # Información del torneo
-                    if 'tournament' in tournament_data:
-                        tournament = tournament_data['tournament']
-                        enriched_data.at[idx, 'tournament_name'] = tournament.get('name', '')
-                        enriched_data.at[idx, 'tournament_category'] = tournament.get('category', '')
-                        enriched_data.at[idx, 'tournament_surface'] = tournament.get('surface', '')
-                        enriched_data.at[idx, 'tournament_draw_size'] = tournament.get('draw_size', 0)
-                    
-                    # Esperar para respetar límites de tasa
-                    time.sleep(1)
-                    
-                except Exception as e:
-                    logger.warning(f"Error procesando partido {match_id}: {str(e)}")
-                    continue
-            
-            logger.info("Enriquecimiento con Sportradar completado")
-            return enriched_data
-            
-        except Exception as e:
-            logger.error(f"Error en enriquecimiento con Sportradar: {str(e)}")
-            return data
-    
-    def _enrich_with_tennis_abstract(self, data: pd.DataFrame, api_config: Dict) -> pd.DataFrame:
-        """
-        Enriquece datos con la API de Tennis Abstract.
-        Obtiene estadísticas avanzadas de partidos y jugadores.
-        Solo procesa datos recientes (últimos 5 años) ya que la API no tiene datos históricos.
-        
-        Args:
-            data: DataFrame con datos básicos
-            api_config: Configuración de la API
-            
-        Returns:
-            DataFrame enriquecido con datos de Tennis Abstract
-        """
-        try:
-            enriched_data = data.copy()
-            base_url = api_config['base_url']
-            api_key = api_config.get('key')
-            
-            # Crear sesión para la API
-            session = requests.Session()
-            headers = {
-                'User-Agent': self.user_agent,
-                'Accept': 'application/json'
-            }
-            if api_key:
-                headers['Authorization'] = f'Bearer {api_key}'
-            session.headers.update(headers)
-            
-            # Filtrar solo datos recientes (últimos 5 años)
-            current_year = datetime.now().year
-            recent_data = enriched_data[enriched_data['match_date'].dt.year >= current_year - 5].copy()
-            
-            if recent_data.empty:
-                logger.info("No hay datos recientes para procesar con Tennis Abstract")
-                return enriched_data
-            
-            logger.info(f"Procesando {len(recent_data)} partidos recientes con Tennis Abstract...")
-            
-            # Procesar cada partido
-            for idx, row in recent_data.iterrows():
-                try:
-                    # Construir ID de partido en formato correcto
-                    match_date = row['match_date']
-                    tournament_id = row['tournament_id']
-                    match_num = row['match_id']
-                    
-                    # Formato: YYYY-TournamentID-MatchNum
-                    match_id = f"{match_date.year}-{tournament_id}-{match_num}"
-                    
-                    match_url = f"{base_url}/matches/{match_id}.json"
-                    
-                    # Verificar si ya tenemos los datos en caché
-                    cache_file = Path('data/cache/tennis_abstract') / f"{match_id}.json"
-                    cache_file.parent.mkdir(parents=True, exist_ok=True)
-                    
-                    if cache_file.exists() and not self.force_refresh:
-                        with open(cache_file, 'r') as f:
-                            match_data = json.load(f)
-                    else:
-                        response = session.get(match_url)
-                        if response.status_code == 404:
-                            logger.debug(f"Partido {match_id} no encontrado en Tennis Abstract")
-                            continue
-                        response.raise_for_status()
-                        match_data = response.json()
-                        
-                        # Guardar en caché
-                        with open(cache_file, 'w') as f:
-                            json.dump(match_data, f)
-                    
-                    # Extraer estadísticas avanzadas
-                    if 'advanced_stats' in match_data:
-                        stats = match_data['advanced_stats']
-                        
-                        # Estadísticas de servicio avanzadas
-                        enriched_data.at[idx, 'first_serve_speed_1'] = stats.get('first_serve_speed_1', 0)
-                        enriched_data.at[idx, 'first_serve_speed_2'] = stats.get('first_serve_speed_2', 0)
-                        enriched_data.at[idx, 'second_serve_speed_1'] = stats.get('second_serve_speed_1', 0)
-                        enriched_data.at[idx, 'second_serve_speed_2'] = stats.get('second_serve_speed_2', 0)
-                        
-                        # Estadísticas de puntos avanzadas
-                        enriched_data.at[idx, 'net_points_won_1'] = stats.get('net_points_won_1', 0)
-                        enriched_data.at[idx, 'net_points_won_2'] = stats.get('net_points_won_2', 0)
-                        enriched_data.at[idx, 'net_points_played_1'] = stats.get('net_points_played_1', 0)
-                        enriched_data.at[idx, 'net_points_played_2'] = stats.get('net_points_played_2', 0)
-                        
-                        # Estadísticas de rallies
-                        enriched_data.at[idx, 'rally_length_0_4_1'] = stats.get('rally_length_0_4_1', 0)
-                        enriched_data.at[idx, 'rally_length_0_4_2'] = stats.get('rally_length_0_4_2', 0)
-                        enriched_data.at[idx, 'rally_length_5_8_1'] = stats.get('rally_length_5_8_1', 0)
-                        enriched_data.at[idx, 'rally_length_5_8_2'] = stats.get('rally_length_5_8_2', 0)
-                        enriched_data.at[idx, 'rally_length_9_plus_1'] = stats.get('rally_length_9_plus_1', 0)
-                        enriched_data.at[idx, 'rally_length_9_plus_2'] = stats.get('rally_length_9_plus_2', 0)
-                    
-                    # Obtener datos de los jugadores
-                    for player_num in [1, 2]:
-                        player_id = row[f'player{player_num}_id']
-                        player_url = f"{base_url}/players/{player_id}/stats.json"
-                        
-                        # Verificar caché de jugador
-                        player_cache_file = Path('data/cache/tennis_abstract/players') / f"{player_id}.json"
-                        player_cache_file.parent.mkdir(parents=True, exist_ok=True)
-                        
-                        if player_cache_file.exists() and not self.force_refresh:
-                            with open(player_cache_file, 'r') as f:
-                                player_data = json.load(f)
-                        else:
-                            response = session.get(player_url)
-                            if response.status_code == 404:
-                                logger.debug(f"Jugador {player_id} no encontrado en Tennis Abstract")
-                                continue
-                            response.raise_for_status()
-                            player_data = response.json()
-                            
-                            # Guardar en caché
-                            with open(player_cache_file, 'w') as f:
-                                json.dump(player_data, f)
-                        
-                        # Estadísticas históricas del jugador
-                        if 'historical_stats' in player_data:
-                            hist_stats = player_data['historical_stats']
-                            enriched_data.at[idx, f'player{player_num}_career_win_rate'] = hist_stats.get('career_win_rate', 0)
-                            enriched_data.at[idx, f'player{player_num}_career_serve_win_rate'] = hist_stats.get('career_serve_win_rate', 0)
-                            enriched_data.at[idx, f'player{player_num}_career_return_win_rate'] = hist_stats.get('career_return_win_rate', 0)
-                            enriched_data.at[idx, f'player{player_num}_career_break_point_conversion'] = hist_stats.get('career_break_point_conversion', 0)
-                            
-                            # Estadísticas por superficie
-                            surface_stats = hist_stats.get('surface_stats', {})
-                            for surface in ['hard', 'clay', 'grass']:
-                                if surface in surface_stats:
-                                    enriched_data.at[idx, f'player{player_num}_{surface}_win_rate'] = surface_stats[surface].get('win_rate', 0)
-                                    enriched_data.at[idx, f'player{player_num}_{surface}_serve_win_rate'] = surface_stats[surface].get('serve_win_rate', 0)
-                                    enriched_data.at[idx, f'player{player_num}_{surface}_return_win_rate'] = surface_stats[surface].get('return_win_rate', 0)
-                    
-                    # Esperar para respetar límites de tasa
-                    time.sleep(1)
-                    
-                except requests.exceptions.HTTPError as e:
-                    if e.response.status_code == 404:
-                        logger.debug(f"Recurso no encontrado en Tennis Abstract: {str(e)}")
-                    else:
-                        logger.warning(f"Error HTTP procesando partido {match_id}: {str(e)}")
-                    continue
-                except Exception as e:
-                    logger.warning(f"Error procesando partido {match_id}: {str(e)}")
-                    continue
-            
-            logger.info("Enriquecimiento con Tennis Abstract completado")
-            return enriched_data
-            
-        except Exception as e:
-            logger.error(f"Error en enriquecimiento con Tennis Abstract: {str(e)}")
-            return data
-    
-    def _enrich_with_jeff_sackmann(self, data: pd.DataFrame) -> pd.DataFrame:
-        """
-        Enriquece los datos usando Jeff Sackmann's Tennis Data.
+        Enriquece los datos con estadísticas de Ultimate Tennis Statistics.
+        Solo procesa partidos de los últimos 5 años ya que no hay datos históricos disponibles.
         
         Args:
             data: DataFrame con datos básicos
@@ -901,111 +665,365 @@ class AdvancedTennisDataCollector(TennisDataCollector):
             DataFrame enriquecido
         """
         try:
-            logger.info("Enriqueciendo datos con Jeff Sackmann's Tennis Data...")
+            logger.info("Enriqueciendo datos con Ultimate Tennis Statistics...")
+            
+            # Filtrar solo partidos recientes (últimos 5 años)
+            current_year = datetime.now().year
+            recent_data = data[data['match_date'].dt.year >= current_year - 5].copy()
+            
+            if recent_data.empty:
+                logger.info("No hay partidos recientes para procesar con Ultimate Tennis Statistics")
+                return data
+            
+            logger.info(f"Procesando {len(recent_data)} partidos recientes con Ultimate Tennis Statistics...")
+            
+            # Crear sesión con reintentos
+            session = requests.Session()
+            retry_strategy = Retry(
+                total=5,
+                backoff_factor=1,
+                status_forcelist=[429, 500, 502, 503, 504],
+            )
+            adapter = HTTPAdapter(max_retries=retry_strategy)
+            session.mount("http://", adapter)
+            session.mount("https://", adapter)
+            
+            # Sistema de checkpoint
+            checkpoint_file = Path('data/cache/ultimate_tennis_checkpoint.json')
+            checkpoint_data = {}
+            if checkpoint_file.exists():
+                with open(checkpoint_file, 'r') as f:
+                    checkpoint_data = json.load(f)
+                logger.info(f"Cargando checkpoint: {len(checkpoint_data)} partidos ya procesados")
+            
+            # Procesar partidos en lotes
+            batch_size = 100
+            enriched_data = []
+            processed_count = 0
+            start_time = time.time()
+            
+            for i in range(0, len(recent_data), batch_size):
+                batch = recent_data.iloc[i:i+batch_size]
+                batch_enriched = []
+                
+                for _, match in batch.iterrows():
+                    match_id = f"{match['tournament_id']}_{match['match_id']}"
+                    
+                    # Verificar si ya fue procesado
+                    if match_id in checkpoint_data:
+                        batch_enriched.append(checkpoint_data[match_id])
+                        processed_count += 1
+                        continue
+                    
+                    try:
+                        # Construir URL del partido
+                        match_date = pd.to_datetime(match['match_date'])
+                        match_url = f"https://www.ultimatetennisstatistics.com/match/{match_date.year}/{match['tournament_id']}/{match['match_id']}.html"
+                        
+                        # Hacer petición con timeout
+                        response = session.get(match_url, timeout=30)
+                        response.raise_for_status()
+                        
+                        # Parsear HTML
+                        soup = BeautifulSoup(response.text, 'html.parser')
+                        
+                        # Extraer estadísticas detalladas
+                        stats = self._extract_ultimate_tennis_stats(soup)
+                        
+                        # Combinar con datos originales
+                        match_data = match.to_dict()
+                        match_data.update(stats)
+                        batch_enriched.append(match_data)
+                        
+                        # Guardar en checkpoint
+                        checkpoint_data[match_id] = match_data
+                        if len(checkpoint_data) % 100 == 0:
+                            with open(checkpoint_file, 'w') as f:
+                                json.dump(checkpoint_data, f)
+                        
+                        processed_count += 1
+                        
+                        # Calcular tiempo estimado restante
+                        elapsed_time = time.time() - start_time
+                        matches_per_second = processed_count / elapsed_time
+                        remaining_matches = len(recent_data) - processed_count
+                        estimated_seconds = remaining_matches / matches_per_second
+                        
+                        logger.info(f"Procesado {processed_count}/{len(recent_data)} partidos "
+                                  f"({processed_count/len(recent_data)*100:.1f}%) - "
+                                  f"Tiempo estimado restante: {estimated_seconds/3600:.1f} horas")
+                        
+                        # Esperar entre peticiones
+                        time.sleep(random.uniform(1, 3))
+                        
+                    except Exception as e:
+                        logger.warning(f"Error procesando partido {match_id}: {str(e)}")
+                        batch_enriched.append(match.to_dict())
+                        processed_count += 1
+                
+                enriched_data.extend(batch_enriched)
+                
+                # Guardar checkpoint después de cada lote
+                with open(checkpoint_file, 'w') as f:
+                    json.dump(checkpoint_data, f)
+            
+            # Eliminar archivo de checkpoint al completar
+            if checkpoint_file.exists():
+                checkpoint_file.unlink()
+            
+            # Combinar datos enriquecidos con datos históricos
+            enriched_df = pd.DataFrame(enriched_data)
+            historical_data = data[data['match_date'].dt.year < current_year - 5]
+            final_data = pd.concat([historical_data, enriched_df], ignore_index=True)
+            
+            return final_data
+            
+        except Exception as e:
+            logger.error(f"Error en enriquecimiento con Ultimate Tennis Statistics: {str(e)}")
+            return data
+            
+    def _extract_ultimate_tennis_stats(self, soup: BeautifulSoup) -> Dict:
+        """
+        Extrae estadísticas detalladas de Ultimate Tennis Statistics.
+        
+        Args:
+            soup: Objeto BeautifulSoup con el HTML parseado
+            
+        Returns:
+            Diccionario con estadísticas extraídas
+        """
+        stats = {}
+        
+        try:
+            # Extraer estadísticas de presión
+            pressure_stats = soup.find('div', {'class': 'pressure-stats'})
+            if pressure_stats:
+                stats['pressure_points_won_1'] = self._extract_number(pressure_stats, 'pressure-points-won-1')
+                stats['pressure_points_won_2'] = self._extract_number(pressure_stats, 'pressure-points-won-2')
+                stats['pressure_points_played_1'] = self._extract_number(pressure_stats, 'pressure-points-played-1')
+                stats['pressure_points_played_2'] = self._extract_number(pressure_stats, 'pressure-points-played-2')
+            
+            # Extraer estadísticas de break points
+            break_stats = soup.find('div', {'class': 'break-point-stats'})
+            if break_stats:
+                stats['break_points_converted_1'] = self._extract_number(break_stats, 'break-points-converted-1')
+                stats['break_points_converted_2'] = self._extract_number(break_stats, 'break-points-converted-2')
+                stats['break_points_saved_1'] = self._extract_number(break_stats, 'break-points-saved-1')
+                stats['break_points_saved_2'] = self._extract_number(break_stats, 'break-points-saved-2')
+            
+            # Extraer estadísticas de tie-breaks
+            tiebreak_stats = soup.find('div', {'class': 'tiebreak-stats'})
+            if tiebreak_stats:
+                stats['tiebreak_points_won_1'] = self._extract_number(tiebreak_stats, 'tiebreak-points-won-1')
+                stats['tiebreak_points_won_2'] = self._extract_number(tiebreak_stats, 'tiebreak-points-won-2')
+                stats['tiebreak_points_played_1'] = self._extract_number(tiebreak_stats, 'tiebreak-points-played-1')
+                stats['tiebreak_points_played_2'] = self._extract_number(tiebreak_stats, 'tiebreak-points-played-2')
+            
+            # Extraer estadísticas de servicio detalladas
+            serve_stats = soup.find('div', {'class': 'serve-stats'})
+            if serve_stats:
+                stats['first_serve_speed_avg_1'] = self._extract_number(serve_stats, 'first-serve-speed-avg-1')
+                stats['first_serve_speed_avg_2'] = self._extract_number(serve_stats, 'first-serve-speed-avg-2')
+                stats['second_serve_speed_avg_1'] = self._extract_number(serve_stats, 'second-serve-speed-avg-1')
+                stats['second_serve_speed_avg_2'] = self._extract_number(serve_stats, 'second-serve-speed-avg-2')
+                stats['serve_speed_max_1'] = self._extract_number(serve_stats, 'serve-speed-max-1')
+                stats['serve_speed_max_2'] = self._extract_number(serve_stats, 'serve-speed-max-2')
+            
+            # Extraer estadísticas de rallies
+            rally_stats = soup.find('div', {'class': 'rally-stats'})
+            if rally_stats:
+                stats['rally_length_avg_1'] = self._extract_number(rally_stats, 'rally-length-avg-1')
+                stats['rally_length_avg_2'] = self._extract_number(rally_stats, 'rally-length-avg-2')
+                stats['rally_length_max_1'] = self._extract_number(rally_stats, 'rally-length-max-1')
+                stats['rally_length_max_2'] = self._extract_number(rally_stats, 'rally-length-max-2')
+            
+        except Exception as e:
+            logger.warning(f"Error extrayendo estadísticas de Ultimate Tennis: {str(e)}")
+        
+        return stats
+        
+    def _extract_number(self, element: BeautifulSoup, class_name: str) -> float:
+        """
+        Extrae un número de un elemento HTML.
+        
+        Args:
+            element: Elemento BeautifulSoup
+            class_name: Nombre de la clase CSS
+            
+        Returns:
+            Número extraído o 0 si no se encuentra
+        """
+        try:
+            value = element.find('span', {'class': class_name})
+            if value:
+                return float(value.text.strip())
+        except:
+            pass
+        return 0.0
+    
+    def _enrich_with_jeff_sackmann(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Enriquece los datos con estadísticas de Jeff Sackmann."""
+        try:
+            logger.info("Enriqueciendo datos con Jeff Sackmann...")
             
             # Crear directorio de caché si no existe
             cache_dir = Path('data/cache/jeff_sackmann')
             cache_dir.mkdir(parents=True, exist_ok=True)
             
-            # Convertir match_date a datetime si no lo es ya
-            if not pd.api.types.is_datetime64_any_dtype(data['match_date']):
-                try:
-                    data['match_date'] = pd.to_datetime(data['match_date'].astype(str), format='%Y%m%d')
-                except Exception as e:
-                    logger.error(f"Error convirtiendo fechas: {str(e)}")
-                    return data
+            # Configurar sesión con reintentos
+            session = requests.Session()
+            retries = Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+            session.mount('https://', HTTPAdapter(max_retries=retries))
             
-            # Verificar si ya tenemos los datos enriquecidos en caché
-            enriched_cache_file = cache_dir / 'enriched_data.csv'
-            if enriched_cache_file.exists() and not self.force_refresh:
-                logger.info("Usando datos enriquecidos en caché...")
-                return pd.read_csv(enriched_cache_file)
+            # Obtener años únicos
+            data['year'] = pd.to_datetime(data['match_date']).dt.year
+            unique_years = data['year'].unique()
             
-            # Agrupar partidos por año para procesarlos más eficientemente
-            for year in data['match_date'].dt.year.unique():
-                try:
-                    logger.info(f"Procesando datos del año {year}...")
-                    
-                    # Filtrar partidos del año actual
-                    year_data = data[data['match_date'].dt.year == year].copy()
-                    
-                    # Construir URL del año
-                    url = f"https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_{year}.csv"
-                    
-                    # Verificar caché
-                    cache_file = cache_dir / f"atp_matches_{year}.csv"
-                    
-                    if cache_file.exists() and not self.force_refresh:
-                        logger.info(f"Usando datos en caché para el año {year}")
-                        year_matches = pd.read_csv(cache_file)
-                    else:
-                        # Intentar descargar datos con reintentos
-                        max_retries = 3
-                        retry_delay = 5  # segundos
+            # Descargar y cachear datos por año
+            year_data = {}
+            for year in unique_years:
+                cache_file = cache_dir / f"atp_matches_{year}.csv"
+                
+                if cache_file.exists() and not self.force_refresh:
+                    logger.info(f"Usando datos en caché para el año {year}")
+                    year_data[year] = pd.read_csv(cache_file)
+                else:
+                    try:
+                        url = f"https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_matches_{year}.csv"
+                        logger.info(f"Descargando datos para el año {year}")
+                        response = session.get(url, timeout=30)
+                        response.raise_for_status()
                         
-                        for attempt in range(max_retries):
-                            try:
-                                response = self.session.get(url)
-                                response.raise_for_status()
-                                break
-                            except Exception as e:
-                                if attempt < max_retries - 1:
-                                    logger.warning(f"Intento {attempt + 1} fallido para el año {year}: {str(e)}")
-                                    logger.info(f"Esperando {retry_delay} segundos antes de reintentar...")
-                                    time.sleep(retry_delay)
-                                    retry_delay *= 2  # Aumentar el retraso exponencialmente
-                                else:
-                                    raise
-                        
-                        # Leer CSV directamente
-                        content = response.content.decode('utf-8')
-                        year_matches = pd.read_csv(StringIO(content))
-                        
-                        # Guardar en caché
-                        year_matches.to_csv(cache_file, index=False)
+                        # Guardar en caché y cargar
+                        with open(cache_file, 'wb') as f:
+                            f.write(response.content)
+                        year_data[year] = pd.read_csv(cache_file)
                         logger.info(f"Datos del año {year} guardados en caché")
-                    
-                    # Procesar todos los partidos del año de una vez
-                    for idx, row in year_data.iterrows():
-                        try:
-                            # Filtrar partido específico
-                            match_data = year_matches[
-                                (year_matches['tourney_id'] == str(row['tournament_id'])) &
-                                (year_matches['match_num'] == str(row['match_id']))
-                            ]
-                            
-                            if not match_data.empty:
-                                # Actualizar datos del partido
-                                data.at[idx, 'aces_1'] = match_data['w_ace'].iloc[0]
-                                data.at[idx, 'aces_2'] = match_data['l_ace'].iloc[0]
-                                data.at[idx, 'double_faults_1'] = match_data['w_df'].iloc[0]
-                                data.at[idx, 'double_faults_2'] = match_data['l_df'].iloc[0]
-                                data.at[idx, 'service_points_1'] = match_data['w_svpt'].iloc[0]
-                                data.at[idx, 'service_points_2'] = match_data['l_svpt'].iloc[0]
-                                data.at[idx, 'first_serves_in_1'] = match_data['w_1stIn'].iloc[0]
-                                data.at[idx, 'first_serves_in_2'] = match_data['l_1stIn'].iloc[0]
-                                data.at[idx, 'first_serve_points_won_1'] = match_data['w_1stWon'].iloc[0]
-                                data.at[idx, 'first_serve_points_won_2'] = match_data['l_1stWon'].iloc[0]
-                                data.at[idx, 'second_serve_points_won_1'] = match_data['w_2ndWon'].iloc[0]
-                                data.at[idx, 'second_serve_points_won_2'] = match_data['l_2ndWon'].iloc[0]
-                                data.at[idx, 'service_games_1'] = match_data['w_SvGms'].iloc[0]
-                                data.at[idx, 'service_games_2'] = match_data['l_SvGms'].iloc[0]
-                                data.at[idx, 'break_points_saved_1'] = match_data['w_BpSaved'].iloc[0]
-                                data.at[idx, 'break_points_saved_2'] = match_data['l_BpSaved'].iloc[0]
-                                data.at[idx, 'break_points_faced_1'] = match_data['w_BpFaced'].iloc[0]
-                                data.at[idx, 'break_points_faced_2'] = match_data['l_BpFaced'].iloc[0]
-                            
-                        except Exception as e:
-                            logger.warning(f"Error procesando partido {idx} del año {year}: {str(e)}")
-                            continue
-                    
-                except Exception as e:
-                    logger.warning(f"Error procesando año {year}: {str(e)}")
-                    continue
+                        
+                    except Exception as e:
+                        logger.error(f"Error descargando datos del año {year}: {str(e)}")
+                        continue
             
-            # Guardar datos enriquecidos en caché
-            data.to_csv(enriched_cache_file, index=False)
-            logger.info("Datos enriquecidos guardados en caché")
+            # Procesar partidos en paralelo usando chunks
+            chunk_size = 1000
+            total_chunks = len(data) // chunk_size + (1 if len(data) % chunk_size > 0 else 0)
+            
+            for chunk_idx in range(total_chunks):
+                start_idx = chunk_idx * chunk_size
+                end_idx = min((chunk_idx + 1) * chunk_size, len(data))
+                chunk = data.iloc[start_idx:end_idx]
+                
+                logger.info(f"Procesando chunk {chunk_idx + 1}/{total_chunks} ({start_idx}-{end_idx})")
+                
+                # Procesar cada partido en el chunk
+                for idx, match in chunk.iterrows():
+                    try:
+                        year = pd.to_datetime(match['match_date']).year
+                        if year not in year_data:
+                            continue
+                        
+                        # Buscar partido en los datos del año usando múltiples criterios
+                        year_matches = year_data[year]
+                        match_date = pd.to_datetime(match['match_date']).strftime('%Y%m%d')
+                        
+                        # Filtrar por fecha y jugadores
+                        potential_matches = year_matches[
+                            (year_matches['tourney_date'].astype(str) == match_date) &
+                            (
+                                ((year_matches['winner_id'].astype(str) == str(match['player1_id'])) &
+                                 (year_matches['loser_id'].astype(str) == str(match['player2_id']))) |
+                                ((year_matches['winner_id'].astype(str) == str(match['player2_id'])) &
+                                 (year_matches['loser_id'].astype(str) == str(match['player1_id'])))
+                            )
+                        ]
+                        
+                        if not potential_matches.empty:
+                            stats = potential_matches.iloc[0]
+                            
+                            # Determinar si player1 es el ganador
+                            is_player1_winner = str(stats['winner_id']) == str(match['player1_id'])
+                            
+                            # Estadísticas de servicio
+                            if is_player1_winner:
+                                data.at[idx, 'winner_ace'] = stats.get('w_ace', 0)
+                                data.at[idx, 'winner_df'] = stats.get('w_df', 0)
+                                data.at[idx, 'winner_svpt'] = stats.get('w_svpt', 0)
+                                data.at[idx, 'winner_1stIn'] = stats.get('w_1stIn', 0)
+                                data.at[idx, 'winner_1stWon'] = stats.get('w_1stWon', 0)
+                                data.at[idx, 'winner_2ndWon'] = stats.get('w_2ndWon', 0)
+                                data.at[idx, 'winner_SvGms'] = stats.get('w_SvGms', 0)
+                                data.at[idx, 'winner_bpSaved'] = stats.get('w_bpSaved', 0)
+                                data.at[idx, 'winner_bpFaced'] = stats.get('w_bpFaced', 0)
+                                data.at[idx, 'winner_rank'] = stats.get('winner_rank', 0)
+                                data.at[idx, 'winner_rank_points'] = stats.get('winner_rank_points', 0)
+                                data.at[idx, 'winner_ht'] = stats.get('winner_ht', 0)
+                                data.at[idx, 'winner_age'] = stats.get('winner_age', 0)
+                                data.at[idx, 'winner_hand'] = stats.get('winner_hand', '')
+                                data.at[idx, 'winner_seed'] = stats.get('winner_seed', '')
+                                data.at[idx, 'winner_entry'] = str(stats.get('winner_entry', ''))
+                                data.at[idx, 'winner_ioc'] = stats.get('winner_ioc', '')
+                                
+                                data.at[idx, 'loser_ace'] = stats.get('l_ace', 0)
+                                data.at[idx, 'loser_df'] = stats.get('l_df', 0)
+                                data.at[idx, 'loser_svpt'] = stats.get('l_svpt', 0)
+                                data.at[idx, 'loser_1stIn'] = stats.get('l_1stIn', 0)
+                                data.at[idx, 'loser_1stWon'] = stats.get('l_1stWon', 0)
+                                data.at[idx, 'loser_2ndWon'] = stats.get('l_2ndWon', 0)
+                                data.at[idx, 'loser_SvGms'] = stats.get('l_SvGms', 0)
+                                data.at[idx, 'loser_bpSaved'] = stats.get('l_bpSaved', 0)
+                                data.at[idx, 'loser_bpFaced'] = stats.get('l_bpFaced', 0)
+                                data.at[idx, 'loser_rank'] = stats.get('loser_rank', 0)
+                                data.at[idx, 'loser_rank_points'] = stats.get('loser_rank_points', 0)
+                                data.at[idx, 'loser_ht'] = stats.get('loser_ht', 0)
+                                data.at[idx, 'loser_age'] = stats.get('loser_age', 0)
+                                data.at[idx, 'loser_hand'] = stats.get('loser_hand', '')
+                                data.at[idx, 'loser_seed'] = stats.get('loser_seed', '')
+                                data.at[idx, 'loser_entry'] = str(stats.get('loser_entry', ''))
+                                data.at[idx, 'loser_ioc'] = stats.get('loser_ioc', '')
+                            else:
+                                data.at[idx, 'winner_ace'] = stats.get('l_ace', 0)
+                                data.at[idx, 'winner_df'] = stats.get('l_df', 0)
+                                data.at[idx, 'winner_svpt'] = stats.get('l_svpt', 0)
+                                data.at[idx, 'winner_1stIn'] = stats.get('l_1stIn', 0)
+                                data.at[idx, 'winner_1stWon'] = stats.get('l_1stWon', 0)
+                                data.at[idx, 'winner_2ndWon'] = stats.get('l_2ndWon', 0)
+                                data.at[idx, 'winner_SvGms'] = stats.get('l_SvGms', 0)
+                                data.at[idx, 'winner_bpSaved'] = stats.get('l_bpSaved', 0)
+                                data.at[idx, 'winner_bpFaced'] = stats.get('l_bpFaced', 0)
+                                data.at[idx, 'winner_rank'] = stats.get('loser_rank', 0)
+                                data.at[idx, 'winner_rank_points'] = stats.get('loser_rank_points', 0)
+                                data.at[idx, 'winner_ht'] = stats.get('loser_ht', 0)
+                                data.at[idx, 'winner_age'] = stats.get('loser_age', 0)
+                                data.at[idx, 'winner_hand'] = stats.get('loser_hand', '')
+                                data.at[idx, 'winner_seed'] = stats.get('loser_seed', '')
+                                data.at[idx, 'winner_entry'] = str(stats.get('loser_entry', ''))
+                                data.at[idx, 'winner_ioc'] = stats.get('loser_ioc', '')
+                            
+                            # Características del torneo
+                            data.at[idx, 'tourney_level'] = stats.get('tourney_level', '')
+                            data.at[idx, 'surface'] = stats.get('surface', '')
+                            data.at[idx, 'draw_size'] = stats.get('draw_size', 0)
+                            data.at[idx, 'best_of'] = stats.get('best_of', 0)
+                            
+                    except Exception as e:
+                        logger.error(f"Error procesando partido {match['match_id']}: {str(e)}")
+                        continue
+                
+                # Guardar progreso cada 1000 partidos
+                if (chunk_idx + 1) % 10 == 0:
+                    logger.info(f"Progreso: {end_idx}/{len(data)} partidos procesados ({(end_idx/len(data))*100:.1f}%)")
+            
+            # Calcular días desde último partido
+            logger.info("Calculando días desde último partido...")
+            data = self._calculate_temporal_features(data)
+            
+            # Calcular estadísticas H2H
+            logger.info("Calculando estadísticas H2H...")
+            data = self._calculate_h2h_features(data)
+            
+            # Calcular métricas por superficie
+            logger.info("Calculando métricas por superficie...")
+            data = self._calculate_surface_metrics(data)
             
             logger.info("Enriquecimiento con Jeff Sackmann completado")
             return data
@@ -1013,97 +1031,218 @@ class AdvancedTennisDataCollector(TennisDataCollector):
         except Exception as e:
             logger.error(f"Error en enriquecimiento con Jeff Sackmann: {str(e)}")
             return data
-    
-    def _enrich_with_tennis_stats(self, data: pd.DataFrame) -> pd.DataFrame:
-        """
-        Enriquece datos usando Tennis Stats API (API gratuita).
-        Obtiene estadísticas avanzadas de rendimiento.
+            
+    def _calculate_temporal_features(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Calcula características temporales disponibles en el dataset de Jeff Sackmann.
         
-        Args:
-            data: DataFrame con datos básicos
-            
-        Returns:
-            DataFrame enriquecido con datos de Tennis Stats
+        Nota: Las características como recent_form y momentum no están disponibles en el dataset
+        de Jeff Sackmann y requerirían datos históricos adicionales para calcularse correctamente.
+        Por lo tanto, no se incluyen en esta implementación.
         """
+        logger.info("Iniciando cálculo de características temporales disponibles...")
+        
+        # Ordenar por fecha
+        data = data.sort_values('match_date')
+        
+        # Calcular días desde último partido (usando tourney_date de Jeff Sackmann)
+        for player_col in ['player1_id', 'player2_id']:
+            data[f'{player_col}_days_since_last'] = data.groupby(player_col)['match_date'].diff().dt.days.fillna(0)
+            logger.info(f"Estadísticas de días desde último partido para {player_col}:")
+            logger.info(f"  - Media: {data[f'{player_col}_days_since_last'].mean():.1f} días")
+            logger.info(f"  - Máximo: {data[f'{player_col}_days_since_last'].max()} días")
+            logger.info(f"  - Mínimo: {data[f'{player_col}_days_since_last'].min()} días")
+        
+        return data
+
+    def _calculate_h2h_features(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Calcula estadísticas head-to-head."""
         try:
-            enriched_data = data.copy()
-            base_url = 'https://tennis-stats-api.herokuapp.com/api'
+            logger.info("Iniciando cálculo de estadísticas head-to-head...")
             
-            # Crear sesión para la API
-            session = requests.Session()
-            session.headers.update({
-                'User-Agent': self.user_agent,
-                'Accept': 'application/json'
-            })
+            # Crear clave única para cada par de jugadores
+            data['h2h_key'] = data.apply(
+                lambda x: f"{min(x['player1_id'], x['player2_id'])}_{max(x['player1_id'], x['player2_id'])}",
+                axis=1
+            )
+            logger.info(f"Total de pares únicos de jugadores: {data['h2h_key'].nunique()}")
             
-            # Procesar cada partido
-            for idx, row in enriched_data.iterrows():
-                try:
-                    # Verificar que tenemos los datos necesarios
-                    if 'match_id' not in row or pd.isna(row['match_id']):
-                        logger.warning(f"Partido {idx} no tiene match_id válido")
-                        continue
-                        
-                    match_id = str(row['match_id'])
-                    match_url = f"{base_url}/matches/{match_id}/stats.json"
+            # Calcular historial H2H antes de cada partido
+            h2h_stats = {}
+            total_matches = len(data)
+            processed_matches = 0
+            
+            logger.info("Calculando estadísticas H2H para cada partido...")
+            for idx, row in data.iterrows():
+                h2h_key = row['h2h_key']
+                match_date = row['match_date']
+                
+                # Obtener partidos anteriores entre estos jugadores
+                previous_matches = data[
+                    (data['h2h_key'] == h2h_key) & 
+                    (data['match_date'] < match_date)
+                ]
+                
+                if not previous_matches.empty:
+                    # Calcular estadísticas H2H
+                    total_h2h_matches = len(previous_matches)
+                    player1_wins = len(previous_matches[
+                        previous_matches['winner_id'] == row['player1_id']
+                    ])
                     
-                    # Resto del código...
-                    
-                except Exception as e:
-                    logger.warning(f"Error procesando partido {idx}: {str(e)}")
-                    continue
+                    h2h_stats[idx] = {
+                        'h2h_win_rate': player1_wins / total_h2h_matches,
+                        'h2h_matches': total_h2h_matches
+                    }
+                else:
+                    h2h_stats[idx] = {
+                        'h2h_win_rate': 0.5,  # Valor neutral para primer encuentro
+                        'h2h_matches': 0
+                    }
+                
+                processed_matches += 1
+                if processed_matches % 10000 == 0:
+                    logger.info(f"Progreso H2H: {processed_matches}/{total_matches} partidos procesados ({(processed_matches/total_matches)*100:.1f}%)")
             
-            return enriched_data
+            # Actualizar datos con estadísticas H2H
+            logger.info("Actualizando datos con estadísticas H2H...")
+            for idx, stats in h2h_stats.items():
+                data.at[idx, 'h2h_win_rate'] = stats['h2h_win_rate']
+                data.at[idx, 'h2h_matches'] = stats['h2h_matches']
+            
+            # Mostrar estadísticas finales
+            logger.info("Estadísticas finales de H2H:")
+            logger.info(f"  - Media de partidos H2H: {data['h2h_matches'].mean():.1f}")
+            logger.info(f"  - Máximo de partidos H2H: {data['h2h_matches'].max()}")
+            logger.info(f"  - Mínimo de partidos H2H: {data['h2h_matches'].min()}")
+            logger.info(f"  - Media de win rate H2H: {data['h2h_win_rate'].mean():.3f}")
+            logger.info("Cálculo de estadísticas H2H completado con éxito")
+            
+            return data
             
         except Exception as e:
-            logger.error(f"Error en enriquecimiento con Tennis Stats: {str(e)}")
-            return data 
+            logger.error(f"Error calculando estadísticas H2H: {str(e)}")
+            logger.error(traceback.format_exc())
+            return data
+
+    def _calculate_surface_metrics(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Calcula métricas específicas por superficie."""
+        try:
+            logger.info("Iniciando cálculo de métricas por superficie...")
+            logger.info(f"Superficies disponibles: {data['surface'].unique()}")
+            
+            # Calcular winrate por superficie para cada jugador antes de cada partido
+            surface_stats = {}
+            total_matches = len(data)
+            processed_matches = 0
+            
+            logger.info("Calculando métricas por superficie para cada partido...")
+            for idx, row in data.iterrows():
+                player_id = row['player1_id']
+                surface = row['surface']
+                match_date = row['match_date']
+                
+                # Obtener partidos anteriores del jugador en esta superficie
+                previous_matches = data[
+                    ((data['player1_id'] == player_id) | (data['player2_id'] == player_id)) &
+                    (data['surface'] == surface) &
+                    (data['match_date'] < match_date)
+                ]
+                
+                if not previous_matches.empty:
+                    # Calcular winrate
+                    player_wins = len(previous_matches[
+                        previous_matches['winner_id'] == player_id
+                    ])
+                    surface_stats[idx] = player_wins / len(previous_matches)
+                else:
+                    surface_stats[idx] = 0.5  # Valor neutral para primer partido en la superficie
+                
+                processed_matches += 1
+                if processed_matches % 10000 == 0:
+                    logger.info(f"Progreso métricas superficie: {processed_matches}/{total_matches} partidos procesados ({(processed_matches/total_matches)*100:.1f}%)")
+            
+            # Actualizar datos con métricas de superficie
+            logger.info("Actualizando datos con métricas por superficie...")
+            for idx, winrate in surface_stats.items():
+                data.at[idx, 'surface_winrate'] = winrate
+            
+            # Mostrar estadísticas finales por superficie
+            logger.info("Estadísticas finales por superficie:")
+            for surface in data['surface'].unique():
+                surface_data = data[data['surface'] == surface]
+                logger.info(f"Superficie: {surface}")
+                logger.info(f"  - Media de win rate: {surface_data['surface_winrate'].mean():.3f}")
+                logger.info(f"  - Máximo win rate: {surface_data['surface_winrate'].max():.3f}")
+                logger.info(f"  - Mínimo win rate: {surface_data['surface_winrate'].min():.3f}")
+                logger.info(f"  - Total de partidos: {len(surface_data)}")
+            
+            logger.info("Cálculo de métricas por superficie completado con éxito")
+            return data
+            
+        except Exception as e:
+            logger.error(f"Error calculando métricas por superficie: {str(e)}")
+            logger.error(traceback.format_exc())
+            return data
 
 def main():
-    """
-    Función principal para recopilar y enriquecer datos de tenis.
-    """
+    """Función principal para ejecutar el colector de datos."""
     try:
-        # Crear directorios necesarios
-        Path('data/enriched').mkdir(parents=True, exist_ok=True)
-        Path('data/cache').mkdir(parents=True, exist_ok=True)
-        
         # Configurar logging
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.StreamHandler(),
-                logging.FileHandler('logs/tennis_ml.log')
+                logging.FileHandler('logs/tennis_ml.log'),
+                logging.StreamHandler()
             ]
         )
         logger = logging.getLogger(__name__)
         
-        # Inicializar colector de datos avanzado
-        start_year = 2000
-        end_year = datetime.now().year
-        force_refresh = True  # Forzar recopilación de datos
+        # Obtener argumentos de línea de comandos
+        parser = argparse.ArgumentParser(description='Recopilador de datos de tenis')
+        parser.add_argument('--output', type=str, required=True, help='Ruta del archivo de salida')
+        parser.add_argument('--start-year', type=int, default=2000, help='Año inicial')
+        parser.add_argument('--end-year', type=int, default=2024, help='Año final')
+        parser.add_argument('--detailed-stats', action='store_true', help='Incluir estadísticas detalladas')
+        parser.add_argument('--force-refresh', action='store_true', help='Forzar recopilación de datos')
+        args = parser.parse_args()
         
-        collector = AdvancedTennisDataCollector(
-            start_year=start_year,
-            end_year=end_year,
-            force_refresh=force_refresh
-        )
+        # Crear directorio de logs si no existe
+        os.makedirs('logs', exist_ok=True)
         
-        # Recopilar y enriquecer datos
-        logger.info(f"Iniciando recopilación de datos desde {start_year} hasta {end_year}")
+        # Crear directorio de datos si no existe
+        os.makedirs('data', exist_ok=True)
+        
+        # Inicializar colector
+        collector = AdvancedTennisDataCollector()
+        collector.force_refresh = args.force_refresh
+        
+        # Recopilar datos
+        logger.info(f"Inicializado colector de datos para años {args.start_year}-{args.end_year}")
+        if args.force_refresh:
+            logger.info("Modo force_refresh activado: se recopilarán todos los datos de nuevo")
+            
+        # Recopilar datos enriquecidos
         enriched_data = collector.collect_enriched_data(
-            output_path='data/enriched/tennis_data_enriched.csv'
+            output_path=args.output,
+            start_year=args.start_year,
+            end_year=args.end_year
         )
         
-        if enriched_data is not None and not enriched_data.empty:
-            logger.info(f"Total de partidos procesados: {len(enriched_data)}")
+        if not enriched_data.empty:
+            logger.info(f"Datos enriquecidos guardados en {args.output}")
+            logger.info(f"Total de partidos: {len(enriched_data)}")
+            logger.info(f"Rango de fechas: {enriched_data['match_date'].min()} - {enriched_data['match_date'].max()}")
+            logger.info(f"Tipos de torneos: {enriched_data['tournament_category'].unique()}")
+            logger.info(f"Total de torneos únicos: {enriched_data['tournament_id'].nunique()}")
+            logger.info(f"Total de jugadores únicos: {enriched_data['player1_id'].nunique() + enriched_data['player2_id'].nunique()}")
         else:
-            logger.error("No se pudieron recopilar datos enriquecidos")
+            logger.error("No se pudieron recopilar datos")
             
     except Exception as e:
         logger.error(f"Error en el proceso principal: {str(e)}")
         logger.error(traceback.format_exc())
+        sys.exit(1)
 
 if __name__ == "__main__":
     main() 

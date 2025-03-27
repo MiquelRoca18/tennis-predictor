@@ -1,0 +1,149 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+
+# Entornos virtuales
+venv/
+venv_tf/
+ml-env/
+ml-env-tf2.12/
+.env
+.venv
+env/
+ENV/
+
+# IDEs y editores
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs y datos temporales
+*.log
+logs/*
+!logs/.gitkeep
+train_detailed.log
+train_debug.log
+train.log
+*.tmp
+*.temp
+*.bak
+
+# Cobertura de tests
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+.coverage.*
+coverage.xml
+*.cover
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+
+# Directorios de datos y modelos
+data/*
+!data/.gitkeep
+!data/README.md
+models/*
+!models/.gitkeep
+!models/README.md
+evaluation_results/*
+!evaluation_results/.gitkeep
+
+# Archivos de configuración local
+*.local
+*.local.*
+config/local_*
+config/*.local.json
+
+# Archivos de caché
+*.cache
+.cache/
+target/
+
+# Tests y cobertura
+.hypothesis/
+nosetests.xml
+
+# Sistema operativo
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini
+
+# Base de datos
+*.sqlite
+*.db
+*.sql
+!db_schema.sql
+!initial_data.sql
+
+# Archivos de configuración local
+*.local
+*.local.*
+config/local_*
+config/*.local.json
+
+# Directorios de caché
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+target/
+__pycache__/
+.cache/
+
+# Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.Python
+*.egg-info/
+*.egg
+
+# Archivos de instalación
+Miniforge3-MacOSX-arm64.sh
+
+# Archivos de documentación temporal
+*.md
+!README.md
+!project-installation.md
+!guia-proyecto-tenis.md
+!tennis-ml-comprehensive-guide.md
+!guia-prompts-mejora-tenis.md
+
+# Directorios de desarrollo
+frontend/node_modules/
+frontend/.next/
+frontend/build/
+backend/__pycache__/
+backend/*.pyc
+backend/*.pyo
+backend/*.pyd
+backend/.Python
+backend/env/
+backend/venv/
+backend/.env
+backend/.env.local
+backend/.env.*.local 

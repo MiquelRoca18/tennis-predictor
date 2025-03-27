@@ -12,6 +12,7 @@ import logging
 import os
 from datetime import datetime
 from utils import TennisFeatureEngineering
+from typing import Dict, List, Tuple
 
 # Configurar logging
 logging.basicConfig(
@@ -22,6 +23,8 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+
+logger = logging.getLogger(__name__)
 
 class TennisModelEvaluator:
     """
@@ -174,6 +177,268 @@ class TennisModelEvaluator:
             
         except Exception as e:
             logging.error(f"Error guardando resultados: {e}")
+
+class TennisEvaluator:
+    def __init__(self):
+        self.metrics = {
+            'accuracy': accuracy_score,
+            'precision': precision_score,
+            'recall': recall_score,
+            'f1': f1_score,
+            'roc_auc': roc_auc_score
+        }
+    
+    def evaluate_model(self, y_true: np.ndarray, y_pred: np.ndarray, 
+                      data: pd.DataFrame = None) -> Dict[str, float]:
+        """
+        Evalúa el modelo usando métricas estándar y específicas de tenis.
+        
+        Args:
+            y_true: Etiquetas verdaderas
+            y_pred: Predicciones del modelo
+            data: DataFrame con datos adicionales del partido
+            
+        Returns:
+            Diccionario con todas las métricas
+        """
+        logger.info("Evaluando modelo...")
+        
+        # Métricas estándar
+        results = {}
+        for name, metric in self.metrics.items():
+            results[name] = metric(y_true, y_pred)
+        
+        # Métricas específicas de tenis si tenemos datos adicionales
+        if data is not None:
+            tennis_metrics = self._calculate_tennis_metrics(y_true, y_pred, data)
+            results.update(tennis_metrics)
+        
+        logger.info("Evaluación completada")
+        return results
+    
+    def _calculate_tennis_metrics(self, y_true: np.ndarray, y_pred: np.ndarray, 
+                                data: pd.DataFrame) -> Dict[str, float]:
+        """
+        Calcula métricas específicas para tenis.
+        
+        Args:
+            y_true: Etiquetas verdaderas
+            y_pred: Predicciones del modelo
+            data: DataFrame con datos del partido
+            
+        Returns:
+            Diccionario con métricas específicas de tenis
+        """
+        results = {}
+        
+        # Evaluación por superficie
+        for surface in ['hard', 'clay', 'grass', 'carpet']:
+            surface_mask = data['surface'] == surface
+            if surface_mask.any():
+                surface_accuracy = accuracy_score(y_true[surface_mask], y_pred[surface_mask])
+                results[f'{surface}_accuracy'] = surface_accuracy
+        
+        # Evaluación por ranking
+        ranking_diffs = data['player1_rank'] - data['player2_rank']
+        for diff_range in [(0, 10), (10, 50), (50, 100), (100, float('inf'))]:
+            mask = (ranking_diffs >= diff_range[0]) & (ranking_diffs < diff_range[1])
+            if mask.any():
+                range_accuracy = accuracy_score(y_true[mask], y_pred[mask])
+                results[f'rank_diff_{diff_range[0]}_{diff_range[1]}_accuracy'] = range_accuracy
+        
+        # Evaluación por head-to-head
+        h2h_mask = data['h2h_matches'] > 0
+        if h2h_mask.any():
+            h2h_accuracy = accuracy_score(y_true[h2h_mask], y_pred[h2h_mask])
+            results['h2h_accuracy'] = h2h_accuracy
+        
+        # Evaluación por forma reciente
+        recent_mask = data['recent_matches'] >= 5
+        if recent_mask.any():
+            recent_accuracy = accuracy_score(y_true[recent_mask], y_pred[recent_mask])
+            results['recent_form_accuracy'] = recent_accuracy
+        
+        # Evaluación por tipo de torneo
+        for tournament_type in data['tournament_category'].unique():
+            tournament_mask = data['tournament_category'] == tournament_type
+            if tournament_mask.any():
+                tournament_accuracy = accuracy_score(y_true[tournament_mask], y_pred[tournament_mask])
+                results[f'{tournament_type}_accuracy'] = tournament_accuracy
+        
+        return results
+    
+    def evaluate_by_surface(self, y_true: np.ndarray, y_pred: np.ndarray, 
+                          data: pd.DataFrame) -> Dict[str, Dict[str, float]]:
+        """
+        Evalúa el modelo separadamente para cada superficie.
+        
+        Args:
+            y_true: Etiquetas verdaderas
+            y_pred: Predicciones del modelo
+            data: DataFrame con datos del partido
+            
+        Returns:
+            Diccionario con métricas por superficie
+        """
+        results = {}
+        
+        for surface in ['hard', 'clay', 'grass', 'carpet']:
+            surface_mask = data['surface'] == surface
+            if surface_mask.any():
+                surface_metrics = {}
+                for name, metric in self.metrics.items():
+                    surface_metrics[name] = metric(y_true[surface_mask], y_pred[surface_mask])
+                results[surface] = surface_metrics
+        
+        return results
+    
+    def evaluate_by_ranking_difference(self, y_true: np.ndarray, y_pred: np.ndarray, 
+                                    data: pd.DataFrame) -> Dict[str, Dict[str, float]]:
+        """
+        Evalúa el modelo por diferencia de ranking.
+        
+        Args:
+            y_true: Etiquetas verdaderas
+            y_pred: Predicciones del modelo
+            data: DataFrame con datos del partido
+            
+        Returns:
+            Diccionario con métricas por diferencia de ranking
+        """
+        results = {}
+        
+        ranking_diffs = data['player1_rank'] - data['player2_rank']
+        diff_ranges = [(0, 10), (10, 50), (50, 100), (100, float('inf'))]
+        
+        for diff_range in diff_ranges:
+            mask = (ranking_diffs >= diff_range[0]) & (ranking_diffs < diff_range[1])
+            if mask.any():
+                range_metrics = {}
+                for name, metric in self.metrics.items():
+                    range_metrics[name] = metric(y_true[mask], y_pred[mask])
+                results[f'rank_diff_{diff_range[0]}_{diff_range[1]}'] = range_metrics
+        
+        return results
+    
+    def evaluate_by_tournament_type(self, y_true: np.ndarray, y_pred: np.ndarray, 
+                                  data: pd.DataFrame) -> Dict[str, Dict[str, float]]:
+        """
+        Evalúa el modelo por tipo de torneo.
+        
+        Args:
+            y_true: Etiquetas verdaderas
+            y_pred: Predicciones del modelo
+            data: DataFrame con datos del partido
+            
+        Returns:
+            Diccionario con métricas por tipo de torneo
+        """
+        results = {}
+        
+        for tournament_type in data['tournament_category'].unique():
+            tournament_mask = data['tournament_category'] == tournament_type
+            if tournament_mask.any():
+                tournament_metrics = {}
+                for name, metric in self.metrics.items():
+                    tournament_metrics[name] = metric(y_true[tournament_mask], y_pred[tournament_mask])
+                results[tournament_type] = tournament_metrics
+        
+        return results
+    
+    def evaluate_by_recent_form(self, y_true: np.ndarray, y_pred: np.ndarray, 
+                              data: pd.DataFrame) -> Dict[str, Dict[str, float]]:
+        """
+        Evalúa el modelo por forma reciente del jugador.
+        
+        Args:
+            y_true: Etiquetas verdaderas
+            y_pred: Predicciones del modelo
+            data: DataFrame con datos del partido
+            
+        Returns:
+            Diccionario con métricas por forma reciente
+        """
+        results = {}
+        
+        # Definir rangos de forma reciente
+        form_ranges = [(0, 5), (5, 10), (10, 20), (20, float('inf'))]
+        
+        for form_range in form_ranges:
+            mask = (data['recent_matches'] >= form_range[0]) & (data['recent_matches'] < form_range[1])
+            if mask.any():
+                range_metrics = {}
+                for name, metric in self.metrics.items():
+                    range_metrics[name] = metric(y_true[mask], y_pred[mask])
+                results[f'recent_matches_{form_range[0]}_{form_range[1]}'] = range_metrics
+        
+        return results
+    
+    def evaluate_by_h2h_history(self, y_true: np.ndarray, y_pred: np.ndarray, 
+                              data: pd.DataFrame) -> Dict[str, Dict[str, float]]:
+        """
+        Evalúa el modelo por historial head-to-head.
+        
+        Args:
+            y_true: Etiquetas verdaderas
+            y_pred: Predicciones del modelo
+            data: DataFrame con datos del partido
+            
+        Returns:
+            Diccionario con métricas por historial h2h
+        """
+        results = {}
+        
+        # Definir rangos de partidos h2h
+        h2h_ranges = [(0, 1), (1, 3), (3, 5), (5, float('inf'))]
+        
+        for h2h_range in h2h_ranges:
+            mask = (data['h2h_matches'] >= h2h_range[0]) & (data['h2h_matches'] < h2h_range[1])
+            if mask.any():
+                range_metrics = {}
+                for name, metric in self.metrics.items():
+                    range_metrics[name] = metric(y_true[mask], y_pred[mask])
+                results[f'h2h_matches_{h2h_range[0]}_{h2h_range[1]}'] = range_metrics
+        
+        return results
+    
+    def print_evaluation_results(self, results: Dict[str, float]):
+        """
+        Imprime los resultados de la evaluación de forma formateada.
+        
+        Args:
+            results: Diccionario con resultados de evaluación
+        """
+        logger.info("\nResultados de la evaluación:")
+        logger.info("-" * 50)
+        
+        # Métricas estándar
+        logger.info("\nMétricas estándar:")
+        for metric in ['accuracy', 'precision', 'recall', 'f1', 'roc_auc']:
+            if metric in results:
+                logger.info(f"{metric:10}: {results[metric]:.4f}")
+        
+        # Métricas por superficie
+        surfaces = [k for k in results.keys() if k.endswith('_accuracy') and k.split('_')[0] in ['hard', 'clay', 'grass', 'carpet']]
+        if surfaces:
+            logger.info("\nMétricas por superficie:")
+            for surface in surfaces:
+                logger.info(f"{surface:20}: {results[surface]:.4f}")
+        
+        # Métricas por ranking
+        ranking_metrics = [k for k in results.keys() if k.startswith('rank_diff_')]
+        if ranking_metrics:
+            logger.info("\nMétricas por diferencia de ranking:")
+            for metric in ranking_metrics:
+                logger.info(f"{metric:30}: {results[metric]:.4f}")
+        
+        # Métricas por tipo de torneo
+        tournament_metrics = [k for k in results.keys() if k.endswith('_accuracy') and k.split('_')[0] in ['grand_slam', 'masters', 'atp_tour']]
+        if tournament_metrics:
+            logger.info("\nMétricas por tipo de torneo:")
+            for metric in tournament_metrics:
+                logger.info(f"{metric:25}: {results[metric]:.4f}")
+        
+        logger.info("-" * 50)
 
 def main():
     """Función principal para evaluar el modelo."""

@@ -23,19 +23,106 @@ from sklearn.feature_selection import VarianceThreshold
 import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
+import tensorflow as tf
 
-from model_ensemble import TennisEnsembleModel, TennisXGBoostModel
+from model_ensemble import TennisEnsembleModel, TennisXGBoostModel, TennisNeuralNetwork
 from utils import TennisFeatureEngineering
+from elo_system import TennisELOSystem
 
 # Configurar logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('train_detailed.log', mode='w'),
+        logging.FileHandler('train_detailed.log'),
         logging.StreamHandler()
     ]
 )
+logger = logging.getLogger(__name__)
+
+def prepare_features(data):
+    """
+    Prepara las características para el entrenamiento.
+    
+    Args:
+        data: DataFrame con datos de partidos
+        
+    Returns:
+        X: Características preparadas
+        y: Etiquetas (1 si gana player1, 0 si gana player2)
+    """
+    logging.info("Iniciando preparación de características...")
+    
+    # Crear copia del DataFrame para no modificar el original
+    df = data.copy()
+    
+    # Reorganizar aleatoriamente los jugadores
+    logging.info("Reorganizando aleatoriamente los jugadores...")
+    mask = np.random.rand(len(df)) > 0.5
+    df.loc[mask, ['player1_id', 'player2_id']] = df.loc[mask, ['player2_id', 'player1_id']].values
+    
+    # Crear etiquetas (1 si gana player1, 0 si gana player2)
+    y = (df['winner_id'] == df['player1_id']).astype(int)
+    
+    # Características de ELO
+    logging.info("Calculando características de ELO...")
+    elo_system = TennisELOSystem()
+    elo_features = elo_system.calculate_elo_features(df)
+    
+    # Características temporales
+    logging.info("Añadiendo características temporales...")
+    df['match_date'] = pd.to_datetime(df['match_date'])
+    df['day_of_week'] = df['match_date'].dt.dayofweek
+    df['month'] = df['match_date'].dt.month
+    df['year'] = df['match_date'].dt.year
+    df['season'] = df['month'].apply(lambda x: 'winter' if x in [12,1,2] else 
+                                   'spring' if x in [3,4,5] else 
+                                   'summer' if x in [6,7,8] else 'fall')
+    
+    # Características del partido
+    logging.info("Añadiendo características del partido...")
+    df['sets_played'] = df['sets_played'].fillna(3)  # Valor por defecto
+    df['minutes'] = df['minutes'].fillna(df['minutes'].mean())
+    df['round_numeric'] = df['round'].map({
+        'F': 7, 'SF': 6, 'QF': 5, 'R16': 4, 'R32': 3, 'R64': 2, 'R128': 1
+    }).fillna(1)
+    
+    # Crear características básicas
+    features = []
+    
+    # Características de superficie (one-hot encoding)
+    surface_dummies = pd.get_dummies(df['surface'], prefix='surface')
+    features.append(surface_dummies)
+    
+    # Características de torneo (one-hot encoding)
+    tournament_dummies = pd.get_dummies(df['tournament_category'], prefix='tournament')
+    features.append(tournament_dummies)
+    
+    # Características temporales (one-hot encoding)
+    season_dummies = pd.get_dummies(df['season'], prefix='season')
+    features.append(season_dummies)
+    
+    # Características numéricas
+    numeric_features = pd.DataFrame({
+        'sets_played': df['sets_played'],
+        'minutes': df['minutes'],
+        'round_numeric': df['round_numeric'],
+        'day_of_week': df['day_of_week'],
+        'month': df['month'],
+        'year': df['year']
+    })
+    features.append(numeric_features)
+    
+    # Características de ELO
+    if not elo_features.empty:
+        features.append(elo_features)
+    
+    # Combinar todas las características
+    X = pd.concat(features, axis=1)
+    
+    logging.info(f"Características preparadas: {X.shape}")
+    logging.info(f"Tipos de características: {X.dtypes}")
+    return X, y
 
 def train_models(data_path, model_dir='model', test_size=0.2):
     """
@@ -53,108 +140,114 @@ def train_models(data_path, model_dir='model', test_size=0.2):
         os.makedirs(model_dir, exist_ok=True)
         
         # Cargar datos
-        logging.info("Iniciando carga de datos...")
+        logger.info("Iniciando carga de datos...")
         data = pd.read_csv(data_path)
-        logging.info(f"Datos cargados: {len(data)} partidos")
+        logger.info(f"Datos cargados: {len(data)} partidos")
         
         # Preparar características
-        feature_engineering = TennisFeatureEngineering()
-        X = feature_engineering.extract_features(data)
-        y = data['winner']
+        logger.info("Preparando características...")
+        X, y = prepare_features(data)
+        logger.info(f"Características preparadas: {X.shape}")
         
-        # Dividir datos con estratificación
-        logging.info("Dividiendo datos de entrenamiento...")
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, 
-            test_size=test_size, 
-            random_state=42, 
-            stratify=y
-        )
+        # Dividir datos con validación temporal
+        logger.info("Dividiendo datos de entrenamiento...")
+        tscv = TimeSeriesSplit(n_splits=5)
+        all_metrics = []
         
-        # Entrenar modelo ensemble
-        logging.info("Entrenando modelo ensemble...")
-        ensemble_model = TennisEnsembleModel()
-        ensemble_model.fit(X_train, y_train)
+        for fold, (train_idx, test_idx) in enumerate(tscv.split(X), 1):
+            logger.info(f"\nEntrenando fold {fold}/5...")
+            X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+            y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+            
+            # Crear conjunto de validación
+            X_train_final, X_val, y_train_final, y_val = train_test_split(
+                X_train, y_train, test_size=0.2, random_state=42
+            )
+            
+            # Entrenar modelo ensemble
+            logger.info("Entrenando modelo ensemble...")
+            ensemble_model = TennisEnsembleModel()
+            ensemble_model.fit(X_train_final, y_train_final)
+            
+            # Entrenar modelo XGBoost
+            logger.info("Entrenando modelo XGBoost...")
+            xgb_model = TennisXGBoostModel()
+            xgb_model.fit(X_train_final, y_train_final, optimize_hyperparams=True)
+            
+            # Entrenar red neuronal
+            logger.info("Entrenando red neuronal...")
+            nn_model = TennisNeuralNetwork(input_dim=X_train_final.shape[1])
+            nn_model.fit(X_train_final, y_train_final, epochs=100, batch_size=32)
+            
+            # Evaluar modelos
+            models = {
+                'ensemble': ensemble_model,
+                'xgb': xgb_model,
+                'nn': nn_model
+            }
+            
+            fold_metrics = {}
+            for name, model in models.items():
+                logger.info(f"\nEvaluando modelo {name} en fold {fold}...")
+                y_pred = model.predict(X_test)
+                
+                fold_metrics[name] = {
+                    'accuracy': accuracy_score(y_test, y_pred),
+                    'precision': precision_score(y_test, y_pred, average='weighted'),
+                    'recall': recall_score(y_test, y_pred, average='weighted'),
+                    'f1': f1_score(y_test, y_pred, average='weighted')
+                }
+                
+                # Guardar modelo
+                model_path = os.path.join(model_dir, f'{name}_model_fold_{fold}.pkl')
+                model.save(model_path)
+                
+                # Informe de clasificación
+                logger.info(f"\nInforme de Clasificación - {name} (Fold {fold}):")
+                logger.info(classification_report(y_test, y_pred))
+            
+            all_metrics.append(fold_metrics)
         
-        # Evaluar modelo ensemble
-        y_pred_ensemble = ensemble_model.predict(X_test)
-        metrics_ensemble = {
-            'accuracy': accuracy_score(y_test, y_pred_ensemble),
-            'precision': precision_score(y_test, y_pred_ensemble, average='weighted'),
-            'recall': recall_score(y_test, y_pred_ensemble, average='weighted'),
-            'f1': f1_score(y_test, y_pred_ensemble, average='weighted')
-        }
+        # Calcular métricas promedio
+        avg_metrics = {}
+        for model_name in models.keys():
+            avg_metrics[model_name] = {
+                metric: np.mean([fold[model_name][metric] for fold in all_metrics])
+                for metric in ['accuracy', 'precision', 'recall', 'f1']
+            }
         
-        # Guardar modelo ensemble
-        ensemble_path = os.path.join(model_dir, 'ensemble_model.pkl')
-        ensemble_model.save(ensemble_path)
+        # Visualizaciones
+        plt.figure(figsize=(15, 5))
         
-        # Entrenar modelo XGBoost
-        logging.info("Entrenando modelo XGBoost...")
-        xgb_model = TennisXGBoostModel()
-        xgb_model.fit(X_train, y_train, optimize_hyperparams=True)
-        
-        # Evaluar modelo XGBoost
-        y_pred_xgb = xgb_model.predict(X_test)
-        metrics_xgb = {
-            'accuracy': accuracy_score(y_test, y_pred_xgb),
-            'precision': precision_score(y_test, y_pred_xgb, average='weighted'),
-            'recall': recall_score(y_test, y_pred_xgb, average='weighted'),
-            'f1': f1_score(y_test, y_pred_xgb, average='weighted')
-        }
-        
-        # Guardar modelo XGBoost
-        xgb_path = os.path.join(model_dir, 'xgb_model.pkl')
-        xgb_model.save(xgb_path)
-        
-        # Calcular y guardar importancia de características
-        importance = xgb_model.feature_importance(plot=True)
-        importance.to_csv(os.path.join(model_dir, 'feature_importance.csv'))
-        
-        # Logging de métricas
-        logging.info("\nMétricas del Modelo Ensemble:")
-        for metric, value in metrics_ensemble.items():
-            logging.info(f"{metric}: {value:.4f}")
-        
-        logging.info("\nMétricas del Modelo XGBoost:")
-        for metric, value in metrics_xgb.items():
-            logging.info(f"{metric}: {value:.4f}")
-        
-        # Informe de clasificación
-        logging.info("\nInforme de Clasificación - Ensemble:")
-        logging.info(classification_report(y_test, y_pred_ensemble))
-        
-        logging.info("\nInforme de Clasificación - XGBoost:")
-        logging.info(classification_report(y_test, y_pred_xgb))
-        
-        # Matrices de confusión
-        plt.figure(figsize=(12, 5))
-        
-        plt.subplot(1, 2, 1)
-        sns.heatmap(confusion_matrix(y_test, y_pred_ensemble), annot=True, fmt='d')
-        plt.title('Matriz de Confusión - Ensemble')
-        
-        plt.subplot(1, 2, 2)
-        sns.heatmap(confusion_matrix(y_test, y_pred_xgb), annot=True, fmt='d')
-        plt.title('Matriz de Confusión - XGBoost')
+        # Matrices de confusión promedio
+        for i, (name, model) in enumerate(models.items(), 1):
+            plt.subplot(1, 3, i)
+            y_pred = model.predict(X_test)
+            sns.heatmap(confusion_matrix(y_test, y_pred), annot=True, fmt='d')
+            plt.title(f'Matriz de Confusión - {name}')
         
         plt.tight_layout()
         plt.savefig(os.path.join(model_dir, 'confusion_matrices.png'))
         plt.close()
         
+        # Gráfico de métricas comparativas
+        metrics_df = pd.DataFrame(avg_metrics).T
+        metrics_df.plot(kind='bar', figsize=(10, 6))
+        plt.title('Comparación de Métricas Promedio por Modelo')
+        plt.tight_layout()
+        plt.savefig(os.path.join(model_dir, 'metrics_comparison.png'))
+        plt.close()
+        
         # Tiempo total de entrenamiento
         end_time = time.time()
         total_time = end_time - start_time
-        logging.info(f"\nTiempo total de entrenamiento: {total_time:.2f} segundos")
+        logger.info(f"\nTiempo total de entrenamiento: {total_time:.2f} segundos")
         
-        return {
-            'ensemble_metrics': metrics_ensemble,
-            'xgb_metrics': metrics_xgb
-        }
+        return avg_metrics
         
     except Exception as e:
-        logging.error(f"Error entrenando modelos: {e}", exc_info=True)
-        return None
+        logger.error(f"Error entrenando modelos: {str(e)}", exc_info=True)
+        raise
 
 def main():
     """Función principal para entrenar los modelos."""
@@ -167,10 +260,10 @@ def main():
     
     metrics = train_models(args.data, args.model_dir, args.test_size)
     if metrics:
-        logging.info("Entrenamiento completado exitosamente")
+        logger.info("Entrenamiento completado exitosamente")
         print("Entrenamiento completado exitosamente")
     else:
-        logging.error("Error en el entrenamiento de los modelos")
+        logger.error("Error en el entrenamiento de los modelos")
         print("Error en el entrenamiento de los modelos")
 
 if __name__ == '__main__':
