@@ -13,6 +13,8 @@ from sklearn.preprocessing import StandardScaler
 import joblib
 import requests
 import json
+import psycopg2
+import math
 
 # Obtener la ruta absoluta del directorio actual
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -31,954 +33,1035 @@ logging.basicConfig(
 )
 
 
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+import psycopg2
+from sklearn.preprocessing import StandardScaler
+import math
+
 class TennisFeatureEngineering:
     """
-    Clase para la ingeniería de características en datos de tenis.
+    Clase para generar características avanzadas para el modelo de predicción de tenis
     """
     
-    def __init__(self, data_path=None):
-        """Inicializa la clase con configuraciones por defecto."""
-        self.scaler = StandardScaler()
-        self.feature_weights = {
-            'ranking': 0.15,
-            'h2h': 0.15,
-            'recent_form': 0.15,
-            'surface': 0.15,
-            'fatigue': 0.10,
-            'physical': 0.10,
-            'temporal': 0.10,
-            'tournament': 0.10
-        }
-        self.data_path = data_path
-        self.players_stats = {}
-        self.head_to_head_stats = {}
-        self.tournament_stats = {}
-        self.temporal_stats = {}
-        
-    def extract_features(self, data: pd.DataFrame) -> pd.DataFrame:
+    def __init__(self, db_connection_string):
         """
-        Extrae características de los datos de partidos de tenis.
+        Inicializa el generador de características
         
         Args:
-            data: DataFrame con datos de partidos
+            db_connection_string: String de conexión a PostgreSQL
+        """
+        self.conn_string = db_connection_string
+    
+    def _get_connection(self):
+        """Establece conexión con la base de datos"""
+        return psycopg2.connect(self.conn_string)
+    
+    def extract_h2h_features(self, player1_id, player2_id, match_date=None, surface=None):
+        """
+        Extrae características de historial head-to-head
+        
+        Args:
+            player1_id: ID del primer jugador
+            player2_id: ID del segundo jugador
+            match_date: Fecha hasta la cual considerar partidos (None = todos)
+            surface: Superficie específica (opcional)
             
         Returns:
-            DataFrame con características calculadas
-            
-        Raises:
-            ValueError: Si el DataFrame está vacío o no tiene el formato esperado
-            TypeError: Si el input no es un DataFrame
+            Dict con características H2H
         """
-        if not isinstance(data, pd.DataFrame):
-            raise TypeError("Los datos de entrada deben ser un pandas DataFrame")
-            
-        if data.empty:
-            raise ValueError("El DataFrame está vacío")
-            
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
         try:
-            features = pd.DataFrame(index=data.index)
+            # Construir condición de fecha
+            date_condition = ""
+            params = [player1_id, player2_id, player2_id, player1_id]
             
-            # Lista de características a procesar con sus columnas requeridas
-            feature_configs = {
-                'ranking': {
-                    'columns': ['ranking_1', 'ranking_2'],
-                    'features': {
-                        'ranking_diff': lambda x: x['ranking_1'] - x['ranking_2'],
-                        'ranking_ratio': lambda x: x['ranking_1'] / np.where(x['ranking_2'] == 0, 1, x['ranking_2'])
+            if match_date:
+                date_condition = "AND date < %s"
+                params.extend([match_date, match_date])
+            
+            # Construir condición de superficie
+            surface_condition = ""
+            if surface:
+                surface_condition = "AND surface = %s"
+                params.extend([surface, surface])
+            
+            # Obtener historial H2H
+            cursor.execute(f"""
+            WITH h2h_matches AS (
+                -- Partidos donde player1 ganó a player2
+                SELECT 
+                    1 as p1_won,
+                    winner_id as winner,
+                    loser_id as loser,
+                    date,
+                    surface,
+                    score,
+                    w_ace as winner_aces,
+                    l_ace as loser_aces,
+                    w_df as winner_df,
+                    l_df as loser_df,
+                    w_bpSaved as winner_bp_saved,
+                    w_bpFaced as winner_bp_faced,
+                    l_bpSaved as loser_bp_saved,
+                    l_bpFaced as loser_bp_faced
+                FROM matches
+                WHERE winner_id = %s AND loser_id = %s
+                {date_condition}
+                {surface_condition}
+                
+                UNION ALL
+                
+                -- Partidos donde player2 ganó a player1
+                SELECT 
+                    0 as p1_won,
+                    winner_id as winner,
+                    loser_id as loser,
+                    date,
+                    surface,
+                    score,
+                    w_ace as winner_aces,
+                    l_ace as loser_aces,
+                    w_df as winner_df,
+                    l_df as loser_df,
+                    w_bpSaved as winner_bp_saved,
+                    w_bpFaced as winner_bp_faced,
+                    l_bpSaved as loser_bp_saved,
+                    l_bpFaced as loser_bp_faced
+                FROM matches
+                WHERE winner_id = %s AND loser_id = %s
+                {date_condition}
+                {surface_condition}
+            )
+            SELECT 
+                COUNT(*) as total_matches,
+                SUM(p1_won) as p1_wins,
+                SUM(1 - p1_won) as p2_wins,
+                -- Últimos 3 partidos (1 para p1_victoria, 0 para p2_victoria)
+                ARRAY(SELECT p1_won FROM h2h_matches ORDER BY date DESC LIMIT 3) as last_3_results,
+                -- Promedio de estadísticas cuando p1 gana
+                AVG(CASE WHEN p1_won = 1 THEN 
+                    CASE WHEN winner = %s THEN winner_aces ELSE loser_aces END 
+                END) as p1_win_avg_aces,
+                AVG(CASE WHEN p1_won = 1 THEN 
+                    CASE WHEN winner = %s THEN winner_df ELSE loser_df END 
+                END) as p1_win_avg_df,
+                AVG(CASE WHEN p1_won = 1 THEN 
+                    CASE WHEN winner = %s THEN CAST(winner_bp_saved AS FLOAT) / NULLIF(winner_bp_faced, 0) ELSE CAST(loser_bp_saved AS FLOAT) / NULLIF(loser_bp_faced, 0) END 
+                END) as p1_win_avg_bp_saved_pct,
+                -- Promedio de estadísticas cuando p2 gana
+                AVG(CASE WHEN p1_won = 0 THEN 
+                    CASE WHEN winner = %s THEN winner_aces ELSE loser_aces END 
+                END) as p2_win_avg_aces,
+                AVG(CASE WHEN p1_won = 0 THEN 
+                    CASE WHEN winner = %s THEN winner_df ELSE loser_df END 
+                END) as p2_win_avg_df,
+                AVG(CASE WHEN p1_won = 0 THEN 
+                    CASE WHEN winner = %s THEN CAST(winner_bp_saved AS FLOAT) / NULLIF(winner_bp_faced, 0) ELSE CAST(loser_bp_saved AS FLOAT) / NULLIF(loser_bp_faced, 0) END 
+                END) as p2_win_avg_bp_saved_pct
+            FROM h2h_matches
+            """, params + [player1_id, player1_id, player1_id, player2_id, player2_id, player2_id])
+            
+            result = cursor.fetchone()
+            
+            if result and result[0] > 0:
+                total_matches, p1_wins, p2_wins, last_3_results = result[0:4]
+                
+                # Calcular porcentaje H2H
+                h2h_ratio = p1_wins / total_matches if total_matches > 0 else 0.5
+                
+                # Calcular tendencia reciente (últimos 3 partidos, ponderados)
+                recent_trend = 0
+                weights = [0.6, 0.3, 0.1]  # Mayor peso a partidos más recientes
+                
+                for i, res in enumerate(last_3_results[:min(3, len(last_3_results))]):
+                    if i < len(weights):
+                        recent_trend += res * weights[i]
+                
+                # Normalizar si hay menos de 3 partidos
+                if len(last_3_results) > 0:
+                    recent_trend /= sum(weights[:min(3, len(last_3_results))])
+                else:
+                    recent_trend = 0.5  # Valor neutral
+                
+                # Extraer estadísticas promedio
+                p1_win_stats = {
+                    'aces': result[4] if result[4] is not None else 0,
+                    'df': result[5] if result[5] is not None else 0,
+                    'bp_saved_pct': result[6] if result[6] is not None else 0
+                }
+                
+                p2_win_stats = {
+                    'aces': result[7] if result[7] is not None else 0,
+                    'df': result[8] if result[8] is not None else 0,
+                    'bp_saved_pct': result[9] if result[9] is not None else 0
+                }
+                
+                return {
+                    'h2h_total_matches': total_matches,
+                    'h2h_p1_win_ratio': h2h_ratio,
+                    'h2h_recent_trend': recent_trend,
+                    'h2h_p1_win_stats': p1_win_stats,
+                    'h2h_p2_win_stats': p2_win_stats,
+                    'h2h_win_diff': p1_wins - p2_wins
+                }
+            else:
+                # No hay historial H2H
+                return {
+                    'h2h_total_matches': 0,
+                    'h2h_p1_win_ratio': 0.5,  # Valor neutral
+                    'h2h_recent_trend': 0.5,  # Valor neutral
+                    'h2h_p1_win_stats': {'aces': 0, 'df': 0, 'bp_saved_pct': 0},
+                    'h2h_p2_win_stats': {'aces': 0, 'df': 0, 'bp_saved_pct': 0},
+                    'h2h_win_diff': 0
+                }
+                
+        except Exception as e:
+            print(f"Error en extracción de características H2H: {e}")
+            # Devolver valores por defecto
+            return {
+                'h2h_total_matches': 0,
+                'h2h_p1_win_ratio': 0.5,
+                'h2h_recent_trend': 0.5,
+                'h2h_p1_win_stats': {'aces': 0, 'df': 0, 'bp_saved_pct': 0},
+                'h2h_p2_win_stats': {'aces': 0, 'df': 0, 'bp_saved_pct': 0},
+                'h2h_win_diff': 0
+            }
+        finally:
+            cursor.close()
+            conn.close()
+    
+    def extract_player_style_features(self, player1_id, player2_id):
+        """
+        Extrae características de estilo de juego y físicas de los jugadores
+        
+        Args:
+            player1_id: ID del primer jugador
+            player2_id: ID del segundo jugador
+            
+        Returns:
+            Dict con características de estilo
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # Obtener datos físicos y de estilo
+            cursor.execute("""
+            SELECT 
+                id,
+                height,
+                weight,
+                play_style,
+                hand,
+                backhand,
+                turned_pro,
+                birth_date
+            FROM players
+            WHERE id IN (%s, %s)
+            """, (player1_id, player2_id))
+            
+            players_data = {}
+            for row in cursor.fetchall():
+                player_id, height, weight, play_style, hand, backhand, turned_pro, birth_date = row
+                
+                players_data[player_id] = {
+                    'height': height if height else 183,  # Valor promedio si falta
+                    'weight': weight if weight else 78,   # Valor promedio si falta
+                    'play_style': play_style if play_style else 'unknown',
+                    'hand': hand if hand else 'R',        # Diestro por defecto
+                    'backhand': backhand if backhand else 'two-handed',
+                    'turned_pro': turned_pro if turned_pro else datetime.now().year - 5,
+                    'birth_date': birth_date
+                }
+            
+            # Si falta algún jugador, usar valores por defecto
+            for player_id in [player1_id, player2_id]:
+                if player_id not in players_data:
+                    players_data[player_id] = {
+                        'height': 183,
+                        'weight': 78,
+                        'play_style': 'unknown',
+                        'hand': 'R',
+                        'backhand': 'two-handed',
+                        'turned_pro': datetime.now().year - 5,
+                        'birth_date': datetime.now() - timedelta(days=365*25)
                     }
+            
+            # Calcular diferencias y características derivadas
+            height_diff = players_data[player1_id]['height'] - players_data[player2_id]['height']
+            weight_diff = players_data[player1_id]['weight'] - players_data[player2_id]['weight']
+            
+            # Calcular edad actual aproximada
+            p1_age = None
+            p2_age = None
+            
+            if players_data[player1_id]['birth_date']:
+                p1_age = (datetime.now() - players_data[player1_id]['birth_date']).days / 365.25
+            
+            if players_data[player2_id]['birth_date']:
+                p2_age = (datetime.now() - players_data[player2_id]['birth_date']).days / 365.25
+            
+            # Valores por defecto si faltan
+            p1_age = p1_age if p1_age else 27
+            p2_age = p2_age if p2_age else 27
+            
+            age_diff = p1_age - p2_age
+            
+            # Calcular años de experiencia
+            p1_experience = datetime.now().year - players_data[player1_id]['turned_pro']
+            p2_experience = datetime.now().year - players_data[player2_id]['turned_pro']
+            experience_diff = p1_experience - p2_experience
+            
+            # Codificación de mano dominante (1 si igual, 0 si diferente)
+            same_handed = int(players_data[player1_id]['hand'] == players_data[player2_id]['hand'])
+            
+            # Codificación de revés (1 si igual, 0 si diferente)
+            same_backhand = int(players_data[player1_id]['backhand'] == players_data[player2_id]['backhand'])
+            
+            # Obtener estadísticas de servicio/resto
+            cursor.execute("""
+            WITH player_stats AS (
+                -- Estadísticas como ganador
+                SELECT
+                    winner_id as player_id,
+                    AVG(w_ace) as avg_aces,
+                    AVG(w_df) as avg_df,
+                    AVG(w_svpt) as avg_serve_points,
+                    AVG(w_1stIn) as avg_first_serves_in,
+                    AVG(w_1stWon) as avg_first_serves_won,
+                    AVG(w_2ndWon) as avg_second_serves_won,
+                    AVG(w_SvGms) as avg_service_games,
+                    AVG(w_bpSaved) as avg_bp_saved,
+                    AVG(w_bpFaced) as avg_bp_faced
+                FROM matches
+                WHERE winner_id IN (%s, %s)
+                GROUP BY winner_id
+                
+                UNION ALL
+                
+                -- Estadísticas como perdedor
+                SELECT
+                    loser_id as player_id,
+                    AVG(l_ace) as avg_aces,
+                    AVG(l_df) as avg_df,
+                    AVG(l_svpt) as avg_serve_points,
+                    AVG(l_1stIn) as avg_first_serves_in,
+                    AVG(l_1stWon) as avg_first_serves_won,
+                    AVG(l_2ndWon) as avg_second_serves_won,
+                    AVG(l_SvGms) as avg_service_games,
+                    AVG(l_bpSaved) as avg_bp_saved,
+                    AVG(l_bpFaced) as avg_bp_faced
+                FROM matches
+                WHERE loser_id IN (%s, %s)
+                GROUP BY loser_id
+            )
+            SELECT
+                player_id,
+                AVG(avg_aces) as avg_aces,
+                AVG(avg_df) as avg_df,
+                AVG(CAST(avg_first_serves_in AS FLOAT) / NULLIF(avg_serve_points, 0)) as first_serve_pct,
+                AVG(CAST(avg_first_serves_won AS FLOAT) / NULLIF(avg_first_serves_in, 0)) as first_serve_win_pct,
+                AVG(CAST(avg_second_serves_won AS FLOAT) / NULLIF(avg_serve_points - avg_first_serves_in, 0)) as second_serve_win_pct,
+                AVG(CAST(avg_bp_saved AS FLOAT) / NULLIF(avg_bp_faced, 0)) as bp_saved_pct
+            FROM player_stats
+            GROUP BY player_id
+            """, (player1_id, player2_id, player1_id, player2_id))
+            
+            # Inicializar estadísticas por defecto
+            players_stats = {
+                player1_id: {
+                    'avg_aces': 0, 'avg_df': 0, 'first_serve_pct': 0,
+                    'first_serve_win_pct': 0, 'second_serve_win_pct': 0, 'bp_saved_pct': 0
                 },
-                'elo': {
-                    'columns': ['elo_winner', 'elo_loser'],
-                    'features': {
-                        'elo_diff': lambda x: x['elo_winner'] - x['elo_loser'],
-                        'elo_ratio': lambda x: x['elo_winner'] / np.where(x['elo_loser'] == 0, 1, x['elo_loser'])
-                    }
-                },
-                'elo_surface': {
-                    'columns': ['elo_winner_surface', 'elo_loser_surface'],
-                    'features': {
-                        'elo_surface_diff': lambda x: x['elo_winner_surface'] - x['elo_loser_surface'],
-                        'elo_surface_ratio': lambda x: x['elo_winner_surface'] / np.where(x['elo_loser_surface'] == 0, 1, x['elo_loser_surface'])
-                    }
+                player2_id: {
+                    'avg_aces': 0, 'avg_df': 0, 'first_serve_pct': 0,
+                    'first_serve_win_pct': 0, 'second_serve_win_pct': 0, 'bp_saved_pct': 0
                 }
             }
             
-            # Procesar cada grupo de características
-            for feature_group, config in feature_configs.items():
-                if all(col in data.columns for col in config['columns']):
-                    for feature_name, feature_func in config['features'].items():
-                        try:
-                            features[feature_name] = feature_func(data)
-                            logging.debug(f"Característica {feature_name} calculada exitosamente")
-                        except Exception as e:
-                            logging.warning(f"Error calculando {feature_name}: {str(e)}")
-                            features[feature_name] = 0
-                else:
-                    missing_cols = [col for col in config['columns'] if col not in data.columns]
-                    logging.warning(f"Columnas faltantes para {feature_group}: {missing_cols}")
-            
-            # Características simples (una sola columna)
-            simple_features = [
-                'surface_winrate_diff', 'winrate_diff', 'fatigue_diff',
-                'physical_advantage', 'temporal_advantage', 'tournament_experience_diff',
-                'h2h_advantage', 'momentum_diff', 'rest_advantage', 'time_of_day_advantage'
-            ]
-            
-            for feature in simple_features:
-                if feature in data.columns:
-                    features[feature] = data[feature]
-                    logging.debug(f"Característica {feature} copiada exitosamente")
-            
-            # Validar que tengamos al menos una característica
-            if features.empty:
-                logging.warning("No se encontraron características disponibles. Creando columna dummy.")
-                features['dummy'] = 0
-            
-            # Rellenar valores nulos con la mediana de cada columna
-            for col in features.columns:
-                if features[col].isnull().any():
-                    median_value = features[col].median()
-                    features[col] = features[col].fillna(median_value)
-                    logging.info(f"Valores nulos en {col} rellenados con la mediana: {median_value}")
-            
-            # Detectar y manejar valores extremos
-            for col in features.columns:
-                if col != 'dummy':
-                    Q1 = features[col].quantile(0.25)
-                    Q3 = features[col].quantile(0.75)
-                    IQR = Q3 - Q1
-                    lower_bound = Q1 - 1.5 * IQR
-                    upper_bound = Q3 + 1.5 * IQR
-                    
-                    outliers = ((features[col] < lower_bound) | (features[col] > upper_bound))
-                    if outliers.any():
-                        n_outliers = outliers.sum()
-                        features.loc[outliers, col] = features[col].clip(lower_bound, upper_bound)
-                        logging.info(f"Se detectaron y corrigieron {n_outliers} valores extremos en {col}")
-            
-            # Normalizar características
-            features = self._normalize_features(features)
-            
-            # Validación final
-            if features.isnull().any().any():
-                raise ValueError("Hay valores nulos en las características después del procesamiento")
+            # Actualizar con datos reales si están disponibles
+            for row in cursor.fetchall():
+                player_id, avg_aces, avg_df, first_serve_pct, first_serve_win_pct, second_serve_win_pct, bp_saved_pct = row
                 
-            return features
-            
-        except Exception as e:
-            logging.error(f"Error en la extracción de características: {str(e)}")
-            raise
-    
-    def _calculate_surface_advantage(self, data: pd.DataFrame) -> pd.Series:
-        """Calcula la ventaja por superficie."""
-        surface_advantage = pd.Series(0, index=data.index)
-        for surface in data['surface'].unique():
-            mask = data['surface'] == surface
-            surface_advantage[mask] = (
-                data.loc[mask, 'winner_surface_win_rate'] - 
-                data.loc[mask, 'loser_surface_win_rate']
-            )
-        return surface_advantage
-    
-    def _calculate_recent_form(self, data: pd.DataFrame) -> pd.Series:
-        """Calcula la forma reciente de los jugadores."""
-        return (
-            data['winner_recent_wins'] / (data['winner_recent_matches'] + 1) -
-            data['loser_recent_wins'] / (data['loser_recent_matches'] + 1)
-        )
-    
-    def _calculate_fatigue(self, match_data: dict) -> float:
-        """
-        Calcula el nivel de fatiga de los jugadores.
-        
-        Args:
-            match_data: Diccionario con datos del partido
-            
-        Returns:
-            Diferencia de fatiga entre jugadores
-        """
-        try:
-            player1 = match_data.get('player_1', match_data.get('player1', ''))
-            player2 = match_data.get('player_2', match_data.get('player2', ''))
-            match_date = match_data.get('date')
-            
-            if not match_date or not player1 or not player2:
-                return 0.0
-            
-            # Obtener estadísticas de partidos recientes
-            p1_stats = self.players_stats.get(player1, {})
-            p2_stats = self.players_stats.get(player2, {})
-            
-            # Calcular días de descanso
-            p1_last_match = p1_stats.get('last_match_date')
-            p2_last_match = p2_stats.get('last_match_date')
-            
-            if not p1_last_match or not p2_last_match:
-                return 0.0
-            
-            p1_rest = (match_date - p1_last_match).days
-            p2_rest = (match_date - p2_last_match).days
-            
-            # Calcular partidos jugados en los últimos 30 días
-            p1_recent_matches = p1_stats.get('recent_matches', [])
-            p2_recent_matches = p2_stats.get('recent_matches', [])
-            
-            p1_matches = len([m for m in p1_recent_matches if (match_date - m['date']).days <= 30])
-            p2_matches = len([m for m in p2_recent_matches if (match_date - m['date']).days <= 30])
-            
-            # Calcular fatiga
-            p1_fatigue = p1_matches / (p1_rest + 1)
-            p2_fatigue = p2_matches / (p2_rest + 1)
-            
-            return p1_fatigue - p2_fatigue
-            
-        except Exception as e:
-            logging.error(f"Error calculando fatiga: {str(e)}")
-            return 0.0
-    
-    def _calculate_h2h_advantage(self, data: pd.DataFrame) -> pd.Series:
-        """Calcula la ventaja head-to-head."""
-        return (
-            data['winner_h2h_wins'] / (data['winner_h2h_wins'] + data['loser_h2h_wins'] + 1) -
-            data['loser_h2h_wins'] / (data['winner_h2h_wins'] + data['loser_h2h_wins'] + 1)
-        )
-    
-    def _calculate_physical_advantage(self, match_data: dict) -> float:
-        """
-        Calcula ventajas físicas entre jugadores.
-        
-        Args:
-            match_data: Diccionario con datos del partido
-            
-        Returns:
-            Ventaja física entre jugadores
-        """
-        try:
-            player1 = match_data.get('player_1', match_data.get('player1', ''))
-            player2 = match_data.get('player_2', match_data.get('player2', ''))
-            surface = match_data.get('surface', 'hard').lower()
-            
-            if not player1 or not player2:
-                return 0.0
-            
-            # Obtener estadísticas de jugadores
-            p1_stats = self.players_stats.get(player1, {})
-            p2_stats = self.players_stats.get(player2, {})
-            
-            # Ventaja de altura (más importante en superficies rápidas)
-            p1_height = p1_stats.get('height', 180)
-            p2_height = p2_stats.get('height', 180)
-            height_diff = p1_height - p2_height
-            
-            # Factor de superficie
-            surface_speed = {
-                'hard': 1.0,
-                'clay': 0.5,
-                'grass': 1.2,
-                'carpet': 0.8
-            }.get(surface, 1.0)
-            
-            # Ventaja de peso (más importante en superficies lentas)
-            p1_weight = p1_stats.get('weight', 75)
-            p2_weight = p2_stats.get('weight', 75)
-            weight_diff = p1_weight - p2_weight
-            
-            # Calcular ventaja física total
-            physical_advantage = (
-                height_diff * surface_speed +
-                weight_diff * (1 - surface_speed)
-            ) / 100  # Normalizar a un rango razonable
-            
-            return physical_advantage
-            
-        except Exception as e:
-            logging.error(f"Error calculando ventaja física: {str(e)}")
-            return 0.0
-    
-    def _calculate_tournament_experience(self, data: pd.DataFrame) -> pd.Series:
-        """Calcula la experiencia en el torneo actual."""
-        tournament_experience = pd.Series(0, index=data.index)
-        
-        for idx, row in data.iterrows():
-            tournament = row['tournament']
-            winner = row['player_1']
-            loser = row['player_2']
-            
-            # Obtener experiencia en el torneo
-            winner_exp = self.tournament_stats.get((tournament, winner), {}).get('matches_played', 0)
-            loser_exp = self.tournament_stats.get((tournament, loser), {}).get('matches_played', 0)
-            
-            # Calcular ventaja de experiencia
-            tournament_experience[idx] = winner_exp - loser_exp
-            
-        return tournament_experience
-
-    def _calculate_momentum(self, data: pd.DataFrame) -> pd.Series:
-        """Calcula el momentum de los jugadores basado en resultados recientes."""
-        momentum = pd.Series(0, index=data.index)
-        
-        for idx, row in data.iterrows():
-            winner = row['player_1']
-            loser = row['player_2']
-            
-            # Obtener resultados recientes
-            winner_recent = self.players_stats.get(winner, {}).get('recent_results', [])
-            loser_recent = self.players_stats.get(loser, {}).get('recent_results', [])
-            
-            # Calcular momentum (ponderado por recencia)
-            winner_momentum = sum(
-                (1 - i/len(winner_recent)) * result 
-                for i, result in enumerate(winner_recent)
-            ) if winner_recent else 0
-            
-            loser_momentum = sum(
-                (1 - i/len(loser_recent)) * result 
-                for i, result in enumerate(loser_recent)
-            ) if loser_recent else 0
-            
-            momentum[idx] = winner_momentum - loser_momentum
-            
-        return momentum
-
-    def _calculate_seasonal_advantage(self, data: pd.DataFrame) -> pd.Series:
-        """Calcula ventajas estacionales basadas en el momento del año."""
-        seasonal_advantage = pd.Series(0, index=data.index)
-        
-        for idx, row in data.iterrows():
-            match_date = pd.to_datetime(row['match_date'])
-            month = match_date.month
-            
-            # Obtener preferencias estacionales de los jugadores
-            winner_seasonal = self.players_stats.get(row['player_1'], {}).get('seasonal_preferences', {})
-            loser_seasonal = self.players_stats.get(row['player_2'], {}).get('seasonal_preferences', {})
-            
-            # Calcular ventaja estacional
-            winner_month_perf = winner_seasonal.get(month, 0.5)
-            loser_month_perf = loser_seasonal.get(month, 0.5)
-            
-            seasonal_advantage[idx] = winner_month_perf - loser_month_perf
-            
-        return seasonal_advantage
-
-    def _calculate_rest_advantage(self, match_data: dict) -> float:
-        """
-        Calcula la ventaja de descanso entre jugadores.
-        
-        Args:
-            match_data: Diccionario con datos del partido
-            
-        Returns:
-            Ventaja de descanso entre jugadores
-        """
-        try:
-            player1 = match_data.get('player_1', match_data.get('player1', ''))
-            player2 = match_data.get('player_2', match_data.get('player2', ''))
-            match_date = match_data.get('date')
-            
-            if not match_date or not player1 or not player2:
-                return 0.0
-            
-            # Obtener estadísticas de jugadores
-            p1_stats = self.players_stats.get(player1, {})
-            p2_stats = self.players_stats.get(player2, {})
-            
-            # Calcular días de descanso
-            p1_last_match = p1_stats.get('last_match_date')
-            p2_last_match = p2_stats.get('last_match_date')
-            
-            if not p1_last_match or not p2_last_match:
-                return 0.0
-            
-            p1_rest = (match_date - p1_last_match).days
-            p2_rest = (match_date - p2_last_match).days
-            
-            # Calcular ventaja de descanso
-            rest_advantage = p1_rest - p2_rest
-            
-            # Normalizar a un rango razonable
-            return rest_advantage / 7  # Dividir por 7 para normalizar a semanas
-            
-        except Exception as e:
-            logging.error(f"Error calculando ventaja de descanso: {str(e)}")
-            return 0.0
-    
-    def _calculate_time_of_day_advantage(self, match_data: dict) -> float:
-        """
-        Calcula la ventaja por hora del día.
-        
-        Args:
-            match_data: Diccionario con datos del partido
-            
-        Returns:
-            Ventaja por hora del día
-        """
-        try:
-            match_time = match_data.get('time')
-            if not match_time:
-                return 0.0
-            
-            # Convertir hora a formato 24h
-            hour = int(match_time.split(':')[0])
-            
-            # Ventajas por hora del día
-            # Mañana (8-12): Ventaja para jugadores que prefieren jugar temprano
-            # Tarde (12-18): Hora neutral
-            # Noche (18-22): Ventaja para jugadores que prefieren jugar tarde
-            if 8 <= hour < 12:
-                return 0.3  # Ventaja para jugadores de mañana
-            elif 12 <= hour < 18:
-                return 0.0  # Hora neutral
-            else:
-                return -0.3  # Ventaja para jugadores de noche
-            
-        except Exception as e:
-            logging.error(f"Error calculando ventaja por hora del día: {str(e)}")
-            return 0.0
-    
-    def _calculate_seasonal_advantage(self, match_data: dict) -> float:
-        """
-        Calcula la ventaja estacional.
-        
-        Args:
-            match_data: Diccionario con datos del partido
-            
-        Returns:
-            Ventaja estacional
-        """
-        try:
-            match_date = match_data.get('date')
-            if not match_date:
-                return 0.0
-            
-            # Obtener mes del partido
-            month = match_date.month
-            
-            # Ventajas por temporada
-            # Temporada de hierba (junio-julio): Ventaja para jugadores de hierba
-            # Temporada de tierra batida (abril-mayo): Ventaja para jugadores de tierra
-            # Temporada de pista dura (enero-marzo, agosto-diciembre): Ventaja para jugadores de pista dura
-            if 6 <= month <= 7:  # Temporada de hierba
-                return 0.3  # Ventaja para jugadores de hierba
-            elif 4 <= month <= 5:  # Temporada de tierra
-                return -0.3  # Ventaja para jugadores de tierra
-            else:  # Temporada de pista dura
-                return 0.0  # Hora neutral
-            
-        except Exception as e:
-            logging.error(f"Error calculando ventaja estacional: {str(e)}")
-            return 0.0
-    
-    def _calculate_tournament_experience(self, match_data: dict) -> float:
-        """
-        Calcula la diferencia de experiencia en el torneo.
-        
-        Args:
-            match_data: Diccionario con datos del partido
-            
-        Returns:
-            Diferencia de experiencia en el torneo
-        """
-        try:
-            player1 = match_data.get('player_1', match_data.get('player1', ''))
-            player2 = match_data.get('player_2', match_data.get('player2', ''))
-            tournament = match_data.get('tournament', '')
-            
-            if not player1 or not player2 or not tournament:
-                return 0.0
-            
-            # Obtener estadísticas de jugadores
-            p1_stats = self.players_stats.get(player1, {})
-            p2_stats = self.players_stats.get(player2, {})
-            
-            # Obtener experiencia en el torneo
-            p1_tournament_matches = p1_stats.get('tournament_stats', {}).get(tournament, {}).get('total_matches', 0)
-            p2_tournament_matches = p2_stats.get('tournament_stats', {}).get(tournament, {}).get('total_matches', 0)
-            
-            # Calcular diferencia de experiencia
-            experience_diff = p1_tournament_matches - p2_tournament_matches
-            
-            # Normalizar a un rango razonable
-            return experience_diff / 10  # Dividir por 10 para normalizar
-            
-        except Exception as e:
-            logging.error(f"Error calculando experiencia en torneo: {str(e)}")
-            return 0.0
-    
-    def _calculate_momentum(self, match_data: dict) -> float:
-        """
-        Calcula la diferencia de momentum entre jugadores.
-        
-        Args:
-            match_data: Diccionario con datos del partido
-            
-        Returns:
-            Diferencia de momentum entre jugadores
-        """
-        try:
-            player1 = match_data.get('player_1', match_data.get('player1', ''))
-            player2 = match_data.get('player_2', match_data.get('player2', ''))
-            match_date = match_data.get('date')
-            
-            if not match_date or not player1 or not player2:
-                return 0.0
-            
-            # Obtener estadísticas de jugadores
-            p1_stats = self.players_stats.get(player1, {})
-            p2_stats = self.players_stats.get(player2, {})
-            
-            # Obtener partidos recientes
-            p1_recent_matches = p1_stats.get('recent_matches', [])
-            p2_recent_matches = p2_stats.get('recent_matches', [])
-            
-            # Calcular racha de victorias en los últimos 5 partidos
-            p1_wins = sum(1 for m in p1_recent_matches[:5] if m['winner'] == player1)
-            p2_wins = sum(1 for m in p2_recent_matches[:5] if m['winner'] == player2)
-            
-            # Calcular diferencia de momentum
-            momentum_diff = p1_wins - p2_wins
-            
-            # Normalizar a un rango razonable
-            return momentum_diff / 5  # Dividir por 5 para normalizar
-            
-        except Exception as e:
-            logging.error(f"Error calculando momentum: {str(e)}")
-            return 0.0
-    
-    def _normalize_features(self, features: pd.DataFrame) -> pd.DataFrame:
-        """Normaliza las características usando StandardScaler."""
-        return pd.DataFrame(
-            self.scaler.fit_transform(features),
-            columns=features.columns,
-            index=features.index
-        )
-
-
-
-    def build_player_statistics(self):
-        """Construye estadísticas de jugadores desde los datos."""
-        if not self.data_path:
-            logging.warning("No hay ruta de datos definida para construir estadísticas")
-            return
-        
-        try:
-            data = pd.read_csv(self.data_path)
-            data['match_date'] = pd.to_datetime(data['match_date'])
-            players = set(data['player_1'].tolist() + data['player_2'].tolist())
-            
-            for player in players:
-                # Partidos como jugador 1
-                p1_matches = data[data['player_1'] == player]
-                p1_wins = len(p1_matches[p1_matches['winner'] == 0])
-                
-                # Partidos como jugador 2
-                p2_matches = data[data['player_2'] == player]
-                p2_wins = len(p2_matches[p2_matches['winner'] == 1])
-                
-                # Total partidos y victorias
-                total_matches = len(p1_matches) + len(p2_matches)
-                total_wins = p1_wins + p2_wins
-                
-                # Estadísticas por superficie
-                surface_stats = {}
-                for surface in data['surface'].unique():
-                    # Superficie como jugador 1
-                    p1_surface = p1_matches[p1_matches['surface'] == surface]
-                    p1_surface_wins = len(p1_surface[p1_surface['winner'] == 0])
-                    
-                    # Superficie como jugador 2
-                    p2_surface = p2_matches[p2_matches['surface'] == surface]
-                    p2_surface_wins = len(p2_surface[p2_surface['winner'] == 1])
-                    
-                    # Total partidos y victorias en superficie
-                    surface_matches = len(p1_surface) + len(p2_surface)
-                    surface_wins = p1_surface_wins + p2_surface_wins
-                    
-                    if surface_matches > 0:
-                        surface_win_rate = (surface_wins / surface_matches) * 100
-                    else:
-                        surface_win_rate = 0
-                    
-                    surface_stats[surface] = {
-                        'matches': surface_matches,
-                        'wins': surface_wins,
-                        'win_rate': surface_win_rate
-                    }
-                
-                # Obtener ranking promedio
-                if 'ranking_1' in data.columns:
-                    p1_rankings = p1_matches['ranking_1'].tolist()
-                    p2_rankings = p2_matches['ranking_2'].tolist()
-                    avg_ranking = np.mean(p1_rankings + p2_rankings) if (p1_rankings + p2_rankings) else 100
-                else:
-                    avg_ranking = 100
-                
-                # Calcular tasa de victoria
-                win_rate = (total_wins / total_matches) * 100 if total_matches > 0 else 50
-                
-                # Nuevas estadísticas temporales
-                recent_results = []
-                seasonal_preferences = {}
-                time_preferences = {}
-                
-                # Ordenar partidos por fecha
-                all_matches = pd.concat([p1_matches, p2_matches]).sort_values('match_date')
-                
-                # Calcular resultados recientes (últimos 10 partidos)
-                for _, match in all_matches.tail(10).iterrows():
-                    if match['player_1'] == player:
-                        recent_results.append(1 if match['winner'] == 0 else 0)
-                    else:
-                        recent_results.append(1 if match['winner'] == 1 else 0)
-                
-                # Calcular preferencias estacionales
-                for month in range(1, 13):
-                    month_matches = all_matches[all_matches['match_date'].dt.month == month]
-                    if not month_matches.empty:
-                        month_wins = sum(
-                            1 if (row['player_1'] == player and row['winner'] == 0) or
-                                (row['player_2'] == player and row['winner'] == 1)
-                            else 0
-                            for _, row in month_matches.iterrows()
-                        )
-                        seasonal_preferences[month] = month_wins / len(month_matches)
-                
-                # Calcular preferencias por hora del día
-                for hour in range(24):
-                    hour_matches = all_matches[all_matches['match_date'].dt.hour == hour]
-                    if not hour_matches.empty:
-                        hour_wins = sum(
-                            1 if (row['player_1'] == player and row['winner'] == 0) or
-                                (row['player_2'] == player and row['winner'] == 1)
-                            else 0
-                            for _, row in hour_matches.iterrows()
-                        )
-                        time_preferences[hour] = hour_wins / len(hour_matches)
-                
-                # Calcular días de descanso promedio
-                if len(all_matches) > 1:
-                    rest_days = []
-                    for i in range(1, len(all_matches)):
-                        days = (all_matches.iloc[i]['match_date'] - all_matches.iloc[i-1]['match_date']).days
-                        if days > 0:
-                            rest_days.append(days)
-                    avg_rest_days = np.mean(rest_days) if rest_days else 0
-                else:
-                    avg_rest_days = 0
-                
-                # Guardar estadísticas del jugador
-                self.players_stats[player] = {
-                    'total_matches': total_matches,
-                    'total_wins': total_wins,
-                    'win_rate': win_rate,
-                    'avg_ranking': avg_ranking,
-                    'surface_stats': surface_stats,
-                    'recent_results': recent_results,
-                    'seasonal_preferences': seasonal_preferences,
-                    'time_preferences': time_preferences,
-                    'days_rest': avg_rest_days
+                # Corregir valores None
+                players_stats[player_id] = {
+                    'avg_aces': avg_aces if avg_aces is not None else 0,
+                    'avg_df': avg_df if avg_df is not None else 0,
+                    'first_serve_pct': first_serve_pct if first_serve_pct is not None else 0,
+                    'first_serve_win_pct': first_serve_win_pct if first_serve_win_pct is not None else 0,
+                    'second_serve_win_pct': second_serve_win_pct if second_serve_win_pct is not None else 0,
+                    'bp_saved_pct': bp_saved_pct if bp_saved_pct is not None else 0
                 }
             
-            logging.info(f"Estadísticas calculadas para {len(self.players_stats)} jugadores")
+            # Calcular diferencias en estadísticas de servicio
+            serve_stats_diffs = {
+                'aces_diff': players_stats[player1_id]['avg_aces'] - players_stats[player2_id]['avg_aces'],
+                'df_diff': players_stats[player1_id]['avg_df'] - players_stats[player2_id]['avg_df'],
+                'first_serve_pct_diff': players_stats[player1_id]['first_serve_pct'] - players_stats[player2_id]['first_serve_pct'],
+                'first_serve_win_pct_diff': players_stats[player1_id]['first_serve_win_pct'] - players_stats[player2_id]['first_serve_win_pct'],
+                'second_serve_win_pct_diff': players_stats[player1_id]['second_serve_win_pct'] - players_stats[player2_id]['second_serve_win_pct'],
+                'bp_saved_pct_diff': players_stats[player1_id]['bp_saved_pct'] - players_stats[player2_id]['bp_saved_pct']
+            }
+            
+            # Calcular índice de ventaja de servicio
+            p1_serve_index = (players_stats[player1_id]['avg_aces'] * 0.3 + 
+                            players_stats[player1_id]['first_serve_pct'] * 0.3 + 
+                            players_stats[player1_id]['first_serve_win_pct'] * 0.2 + 
+                            players_stats[player1_id]['second_serve_win_pct'] * 0.2 -
+                            players_stats[player1_id]['avg_df'] * 0.1)
+            
+            p2_serve_index = (players_stats[player2_id]['avg_aces'] * 0.3 + 
+                            players_stats[player2_id]['first_serve_pct'] * 0.3 + 
+                            players_stats[player2_id]['first_serve_win_pct'] * 0.2 + 
+                            players_stats[player2_id]['second_serve_win_pct'] * 0.2 -
+                            players_stats[player2_id]['avg_df'] * 0.1)
+            
+            serve_advantage = p1_serve_index - p2_serve_index
+            
+            # Compilar todas las características de estilo
+            style_features = {
+                'height_diff': height_diff,
+                'weight_diff': weight_diff,
+                'age_diff': age_diff,
+                'experience_diff': experience_diff,
+                'same_handed': same_handed,
+                'same_backhand': same_backhand,
+                'p1_height': players_data[player1_id]['height'],
+                'p2_height': players_data[player2_id]['height'],
+                'p1_left_handed': 1 if players_data[player1_id]['hand'] == 'L' else 0,
+                'p2_left_handed': 1 if players_data[player2_id]['hand'] == 'L' else 0,
+                'serve_advantage': serve_advantage,
+                'p1_serve_index': p1_serve_index,
+                'p2_serve_index': p2_serve_index
+            }
+            
+            # Añadir estadísticas individuales
+            for stat_name, stat_diff in serve_stats_diffs.items():
+                style_features[stat_name] = stat_diff
+            
+            for player_id, stats in players_stats.items():
+                prefix = 'p1_' if player_id == player1_id else 'p2_'
+                for stat_name, stat_value in stats.items():
+                    style_features[f"{prefix}{stat_name}"] = stat_value
+            
+            return style_features
             
         except Exception as e:
-            logging.error(f"Error construyendo estadísticas de jugadores: {e}")
+            print(f"Error en extracción de características de estilo: {e}")
+            # Devolver valores por defecto
+            return {
+                'height_diff': 0,
+                'weight_diff': 0,
+                'age_diff': 0,
+                'experience_diff': 0,
+                'same_handed': 1,
+                'same_backhand': 1,
+                'p1_height': 183,
+                'p2_height': 183,
+                'p1_left_handed': 0,
+                'p2_left_handed': 0,
+                'serve_advantage': 0,
+                'p1_serve_index': 0,
+                'p2_serve_index': 0,
+                'aces_diff': 0,
+                'df_diff': 0,
+                'first_serve_pct_diff': 0,
+                'first_serve_win_pct_diff': 0,
+                'second_serve_win_pct_diff': 0,
+                'bp_saved_pct_diff': 0
+            }
+        finally:
+            cursor.close()
+            conn.close()
     
-    def build_head_to_head_statistics(self):
-        """Construye estadísticas head-to-head entre jugadores."""
-        if not self.data_path:
-            logging.warning("No hay ruta de datos definida para construir estadísticas")
-            return
+    def extract_temporal_features(self, player1_id, player2_id, match_date, surface=None):
+        """
+        Extrae características temporales (forma reciente, fatiga, momentum)
+        
+        Args:
+            player1_id: ID del primer jugador
+            player2_id: ID del segundo jugador
+            match_date: Fecha del partido
+            surface: Superficie específica (opcional)
+            
+        Returns:
+            Dict con características temporales
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
         
         try:
-            data = pd.read_csv(self.data_path)
-            data['match_date'] = pd.to_datetime(data['match_date'])
+            # Definir períodos de tiempo para análisis
+            date_1m_ago = match_date - timedelta(days=30)
+            date_3m_ago = match_date - timedelta(days=90)
+            date_6m_ago = match_date - timedelta(days=180)
+            date_12m_ago = match_date - timedelta(days=365)
             
-            for _, row in data.iterrows():
-                player1 = row['player_1']
-                player2 = row['player_2']
-                winner = row['winner']
-                
-                # Usar tupla ordenada como clave para asegurar consistencia
-                player_pair = tuple(sorted([player1, player2]))
-                
-                # Inicializar si no existe
-                if player_pair not in self.head_to_head_stats:
-                    self.head_to_head_stats[player_pair] = {
-                        'total_matches': 0,
-                        'player1_wins': 0,
-                        'player2_wins': 0,
-                        'player1_win_pct': 0,
-                        'player2_win_pct': 0,
-                        'surface_stats': {},
-                        'recent_matches': [],
-                        'avg_duration': 0,
-                        'total_duration': 0,
-                        'last_match_date': None,
-                        'first_match_date': None,
-                        'win_streak': 0,
-                        'current_streak_holder': None
-                    }
-                
-                # Actualizar estadísticas básicas
-                self.head_to_head_stats[player_pair]['total_matches'] += 1
-                
-                if winner == 0:  # Jugador 1 ganó
-                    if player1 == player_pair[0]:
-                        self.head_to_head_stats[player_pair]['player1_wins'] += 1
-                    else:
-                        self.head_to_head_stats[player_pair]['player2_wins'] += 1
-                else:  # Jugador 2 ganó
-                    if player2 == player_pair[0]:
-                        self.head_to_head_stats[player_pair]['player1_wins'] += 1
-                    else:
-                        self.head_to_head_stats[player_pair]['player2_wins'] += 1
-                
-                # Actualizar estadísticas por superficie
-                surface = row['surface']
-                if surface not in self.head_to_head_stats[player_pair]['surface_stats']:
-                    self.head_to_head_stats[player_pair]['surface_stats'][surface] = {
-                        'total_matches': 0,
-                        'player1_wins': 0,
-                        'player2_wins': 0,
-                        'player1_win_pct': 0,
-                        'player2_win_pct': 0
-                    }
-                
-                surface_stats = self.head_to_head_stats[player_pair]['surface_stats'][surface]
-                surface_stats['total_matches'] += 1
-                
-                if winner == 0:  # Jugador 1 ganó
-                    if player1 == player_pair[0]:
-                        surface_stats['player1_wins'] += 1
-                    else:
-                        surface_stats['player2_wins'] += 1
-                else:  # Jugador 2 ganó
-                    if player2 == player_pair[0]:
-                        surface_stats['player1_wins'] += 1
-                    else:
-                        surface_stats['player2_wins'] += 1
-                
-                # Actualizar partidos recientes
-                match_info = {
-                    'date': row['match_date'],
-                    'winner': player1 if winner == 0 else player2,
-                    'surface': surface,
-                    'tournament': row['tournament']
-                }
-                self.head_to_head_stats[player_pair]['recent_matches'].append(match_info)
-                
-                # Mantener solo los últimos 10 partidos
-                self.head_to_head_stats[player_pair]['recent_matches'] = sorted(
-                    self.head_to_head_stats[player_pair]['recent_matches'],
-                    key=lambda x: x['date']
-                )[-10:]
-                
-                # Actualizar fechas de primer y último partido
-                match_date = row['match_date']
-                if (self.head_to_head_stats[player_pair]['first_match_date'] is None or 
-                    match_date < self.head_to_head_stats[player_pair]['first_match_date']):
-                    self.head_to_head_stats[player_pair]['first_match_date'] = match_date
-                if (self.head_to_head_stats[player_pair]['last_match_date'] is None or 
-                    match_date > self.head_to_head_stats[player_pair]['last_match_date']):
-                    self.head_to_head_stats[player_pair]['last_match_date'] = match_date
-                
-                # Actualizar duración promedio
-                if 'duration' in row:
-                    self.head_to_head_stats[player_pair]['total_duration'] += row['duration']
-                    self.head_to_head_stats[player_pair]['avg_duration'] = (
-                        self.head_to_head_stats[player_pair]['total_duration'] / 
-                        self.head_to_head_stats[player_pair]['total_matches']
-                    )
-                
-                # Calcular racha actual
-                recent_matches = sorted(
-                    self.head_to_head_stats[player_pair]['recent_matches'],
-                    key=lambda x: x['date']
+            # Condición de superficie
+            surface_condition = ""
+            if surface:
+                surface_condition = f"AND surface = '{surface}'"
+            
+            # Función auxiliar para calcular características temporales de un jugador
+            def get_player_temporal_features(player_id):
+                # Forma reciente: últimos 1, 3, 6, 12 meses
+                cursor.execute(f"""
+                WITH player_matches AS (
+                    -- Partidos ganados
+                    SELECT 
+                        1 as won,
+                        date,
+                        surface,
+                        round
+                    FROM matches
+                    WHERE winner_id = %s
+                    AND date < %s
+                    {surface_condition}
+                    
+                    UNION ALL
+                    
+                    -- Partidos perdidos
+                    SELECT 
+                        0 as won,
+                        date,
+                        surface,
+                        round
+                    FROM matches
+                    WHERE loser_id = %s
+                    AND date < %s
+                    {surface_condition}
                 )
-                current_streak = 0
-                current_holder = None
+                SELECT
+                    -- Forma reciente (últimos 1, 3, 6, 12 meses)
+                    SUM(CASE WHEN date >= %s THEN won ELSE 0 END) as wins_1m,
+                    COUNT(CASE WHEN date >= %s THEN 1 ELSE NULL END) as matches_1m,
+                    
+                    SUM(CASE WHEN date >= %s THEN won ELSE 0 END) as wins_3m,
+                    COUNT(CASE WHEN date >= %s THEN 1 ELSE NULL END) as matches_3m,
+                    
+                    SUM(CASE WHEN date >= %s THEN won ELSE 0 END) as wins_6m,
+                    COUNT(CASE WHEN date >= %s THEN 1 ELSE NULL END) as matches_6m,
+                    
+                    SUM(CASE WHEN date >= %s THEN won ELSE 0 END) as wins_12m,
+                    COUNT(CASE WHEN date >= %s THEN 1 ELSE NULL END) as matches_12m,
+                    
+                    -- Últimos 10 partidos (1: victoria, 0: derrota)
+                    ARRAY(
+                        SELECT won
+                        FROM player_matches
+                        ORDER BY date DESC
+                        LIMIT 10
+                    ) as last_10_results
+                FROM player_matches
+                """, (player_id, match_date, player_id, match_date, 
+                      date_1m_ago, date_1m_ago, 
+                      date_3m_ago, date_3m_ago, 
+                      date_6m_ago, date_6m_ago, 
+                      date_12m_ago, date_12m_ago))
                 
-                for match in reversed(recent_matches):
-                    if current_holder is None:
-                        current_holder = match['winner']
-                        current_streak = 1
-                    elif match['winner'] == current_holder:
-                        current_streak += 1
+                result = cursor.fetchone()
+                
+                if result:
+                    wins_1m, matches_1m, wins_3m, matches_3m, wins_6m, matches_6m, wins_12m, matches_12m, last_10_results = result
+                    
+                    # Calcular win rates (evitar división por cero)
+                    win_rate_1m = wins_1m / matches_1m if matches_1m and matches_1m > 0 else 0.5
+                    win_rate_3m = wins_3m / matches_3m if matches_3m and matches_3m > 0 else 0.5
+                    win_rate_6m = wins_6m / matches_6m if matches_6m and matches_6m > 0 else 0.5
+                    win_rate_12m = wins_12m / matches_12m if matches_12m and matches_12m > 0 else 0.5
+                    
+                    # Partidos jugados recientemente (indicador de actividad)
+                    activity_level = matches_1m * 3 + matches_3m
+                    
+                    # Calcular índice de momentum (ponderación decreciente de resultados recientes)
+                    momentum = 0
+                    weights = [0.20, 0.15, 0.13, 0.11, 0.09, 0.08, 0.07, 0.06, 0.06, 0.05]  # Suma = 1
+                    
+                    for i, res in enumerate(last_10_results[:min(10, len(last_10_results))]):
+                        if i < len(weights):
+                            momentum += res * weights[i]
+                    
+                    # Normalizar si hay menos de 10 partidos
+                    if len(last_10_results) > 0:
+                        momentum /= sum(weights[:min(10, len(last_10_results))])
                     else:
-                        break
-                
-                self.head_to_head_stats[player_pair]['win_streak'] = current_streak
-                self.head_to_head_stats[player_pair]['current_streak_holder'] = current_holder
+                        momentum = 0.5  # Valor neutral
+                    
+                    # Obtener último partido
+                    cursor.execute(f"""
+                    WITH player_last_match AS (
+                        -- Último partido como ganador
+                        SELECT 
+                            date,
+                            minutes
+                        FROM matches
+                        WHERE winner_id = %s
+                        AND date < %s
+                        ORDER BY date DESC
+                        LIMIT 1
+                        
+                        UNION ALL
+                        
+                        -- Último partido como perdedor
+                        SELECT 
+                            date,
+                            minutes
+                        FROM matches
+                        WHERE loser_id = %s
+                        AND date < %s
+                        ORDER BY date DESC
+                        LIMIT 1
+                    )
+                    SELECT 
+                        date,
+                        minutes
+                    FROM player_last_match
+                    ORDER BY date DESC
+                    LIMIT 1
+                    """, (player_id, match_date, player_id, match_date))
+                    
+                    last_match = cursor.fetchone()
+                    
+                    # Calcular días de descanso
+                    days_since_last_match = 30  # Valor por defecto
+                    last_match_duration = 90    # Valor por defecto
+                    
+                    if last_match and last_match[0]:
+                        days_since_last_match = (match_date - last_match[0]).days
+                        last_match_duration = last_match[1] if last_match[1] else 90
+                    
+                    # Índice de fatiga (inverso a días de descanso, ponderado por duración del último partido)
+                    fatigue_index = 0
+                    if days_since_last_match <= 14:  # Solo considerar fatiga hasta 2 semanas
+                        fatigue_base = max(0, (14 - days_since_last_match) / 14)
+                        duration_factor = min(1.5, last_match_duration / 90)  # Normalizado respecto a 90 min
+                        fatigue_index = fatigue_base * duration_factor
+                    
+                    return {
+                        'win_rate_1m': win_rate_1m,
+                        'win_rate_3m': win_rate_3m,
+                        'win_rate_6m': win_rate_6m,
+                        'win_rate_12m': win_rate_12m,
+                        'matches_1m': matches_1m,
+                        'matches_3m': matches_3m,
+                        'momentum': momentum,
+                        'days_since_last_match': days_since_last_match,
+                        'fatigue_index': fatigue_index,
+                        'activity_level': activity_level
+                    }
+                else:
+                    # No hay datos disponibles
+                    return {
+                        'win_rate_1m': 0.5,
+                        'win_rate_3m': 0.5,
+                        'win_rate_6m': 0.5,
+                        'win_rate_12m': 0.5,
+                        'matches_1m': 0,
+                        'matches_3m': 0,
+                        'momentum': 0.5,
+                        'days_since_last_match': 30,
+                        'fatigue_index': 0,
+                        'activity_level': 0
+                    }
             
-            # Calcular porcentajes finales
-            for pair_stats in self.head_to_head_stats.values():
-                total_matches = pair_stats['total_matches']
-                if total_matches > 0:
-                    pair_stats['player1_win_pct'] = pair_stats['player1_wins'] / total_matches
-                    pair_stats['player2_win_pct'] = pair_stats['player2_wins'] / total_matches
-                
-                # Calcular porcentajes por superficie
-                for surface_stats in pair_stats['surface_stats'].values():
-                    surface_total = surface_stats['total_matches']
-                    if surface_total > 0:
-                        surface_stats['player1_win_pct'] = surface_stats['player1_wins'] / surface_total
-                        surface_stats['player2_win_pct'] = surface_stats['player2_wins'] / surface_total
+            # Obtener características para ambos jugadores
+            p1_features = get_player_temporal_features(player1_id)
+            p2_features = get_player_temporal_features(player2_id)
             
-            logging.info(f"Estadísticas head-to-head calculadas para {len(self.head_to_head_stats)} pares de jugadores")
+            # Calcular diferencias
+            temporal_features = {}
+            
+            for key in p1_features.keys():
+                p1_value = p1_features[key]
+                p2_value = p2_features[key]
+                
+                # Añadir valores individuales
+                temporal_features[f'p1_{key}'] = p1_value
+                temporal_features[f'p2_{key}'] = p2_value
+                
+                # Añadir diferencia
+                temporal_features[f'{key}_diff'] = p1_value - p2_value
+            
+            # Calcular índice de forma combinado (ponderando diferentes períodos)
+            temporal_features['p1_form_index'] = (
+                p1_features['win_rate_1m'] * 0.50 +
+                p1_features['win_rate_3m'] * 0.30 +
+                p1_features['win_rate_6m'] * 0.15 +
+                p1_features['win_rate_12m'] * 0.05
+            )
+            
+            temporal_features['p2_form_index'] = (
+                p2_features['win_rate_1m'] * 0.50 +
+                p2_features['win_rate_3m'] * 0.30 +
+                p2_features['win_rate_6m'] * 0.15 +
+                p2_features['win_rate_12m'] * 0.05
+            )
+            
+            temporal_features['form_index_diff'] = temporal_features['p1_form_index'] - temporal_features['p2_form_index']
+            
+            return temporal_features
             
         except Exception as e:
-            logging.error(f"Error construyendo estadísticas head-to-head: {e}")
+            print(f"Error en extracción de características temporales: {e}")
+            # Devolver valores por defecto
+            return {
+                'p1_win_rate_1m': 0.5, 'p2_win_rate_1m': 0.5, 'win_rate_1m_diff': 0,
+                'p1_win_rate_3m': 0.5, 'p2_win_rate_3m': 0.5, 'win_rate_3m_diff': 0,
+                'p1_win_rate_6m': 0.5, 'p2_win_rate_6m': 0.5, 'win_rate_6m_diff': 0,
+                'p1_win_rate_12m': 0.5, 'p2_win_rate_12m': 0.5, 'win_rate_12m_diff': 0,
+                'p1_momentum': 0.5, 'p2_momentum': 0.5, 'momentum_diff': 0,
+                'p1_form_index': 0.5, 'p2_form_index': 0.5, 'form_index_diff': 0,
+                'p1_fatigue_index': 0, 'p2_fatigue_index': 0, 'fatigue_index_diff': 0,
+                'p1_days_since_last_match': 30, 'p2_days_since_last_match': 30, 'days_since_last_match_diff': 0
+            }
+        finally:
+            cursor.close()
+            conn.close()
     
-    def transform_match_data(self, match_data):
+    def extract_tournament_features(self, tournament_id, player1_id, player2_id, match_date):
         """
-        Transforma los datos de un partido para predecir el resultado.
+        Extrae características específicas del torneo
         
         Args:
-            match_data: Diccionario con datos del partido
+            tournament_id: ID del torneo
+            player1_id: ID del primer jugador
+            player2_id: ID del segundo jugador
+            match_date: Fecha del partido
             
         Returns:
-            DataFrame con características para el modelo
+            Dict con características del torneo
         """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
         try:
-            # Extraer datos básicos
-            player1 = match_data.get('player_1', match_data.get('player1', ''))
-            player2 = match_data.get('player_2', match_data.get('player2', ''))
-            surface = match_data.get('surface', 'hard').lower()
-            match_date = match_data.get('date')
+            # Obtener información del torneo
+            cursor.execute("""
+            SELECT 
+                name,
+                surface,
+                draw_size,
+                tourney_level,
+                EXTRACT(YEAR FROM date) as year
+            FROM tournaments
+            WHERE id = %s
+            """, (tournament_id,))
             
-            # Preparar características
-            features = {}
+            tourney_info = cursor.fetchone()
             
-            # Ranking y ELO
-            ranking1 = match_data.get('ranking_1')
-            if ranking1 is None and player1 in self.players_stats:
-                ranking1 = self.players_stats[player1].get('avg_ranking', 100)
-            elif ranking1 is None:
-                ranking1 = 100
+            if not tourney_info:
+                # Torneo desconocido, usar valores por defecto
+                return {
+                    'tournament_level_G': 0,
+                    'tournament_level_M': 0,
+                    'tournament_level_A': 0,
+                    'tournament_level_D': 0,
+                    'tournament_level_F': 0,
+                    'draw_size': 32,
+                    'p1_tournament_history': 0.5,
+                    'p2_tournament_history': 0.5,
+                    'tournament_history_diff': 0
+                }
             
-            ranking2 = match_data.get('ranking_2')
-            if ranking2 is None and player2 in self.players_stats:
-                ranking2 = self.players_stats[player2].get('avg_ranking', 100)
-            elif ranking2 is None:
-                ranking2 = 100
+            name, surface, draw_size, tourney_level, year = tourney_info
             
-            features['ranking_1'] = ranking1
-            features['ranking_2'] = ranking2
+            # Codificar nivel del torneo
+            tournament_level_features = {
+                'tournament_level_G': 1 if tourney_level == 'G' else 0,  # Grand Slam
+                'tournament_level_M': 1 if tourney_level == 'M' else 0,  # Masters 1000
+                'tournament_level_A': 1 if tourney_level == 'A' else 0,  # ATP 500
+                'tournament_level_D': 1 if tourney_level == 'D' else 0,  # ATP 250
+                'tournament_level_F': 1 if tourney_level == 'F' else 0,  # Finals
+                'draw_size': draw_size if draw_size else 32
+            }
             
-            # ELO ratings
-            elo1 = match_data.get('elo_1')
-            if elo1 is None and player1 in self.players_stats:
-                elo1 = self.players_stats[player1].get('elo_rating', 1500)
-            elif elo1 is None:
-                elo1 = 1500
+            # Historial de los jugadores en este torneo
+            def get_player_tournament_history(player_id):
+                # Buscar partidos anteriores en el mismo torneo
+                cursor.execute("""
+                WITH tournament_matches AS (
+                    -- Partidos ganados en este torneo
+                    SELECT 
+                        1 as won,
+                        date,
+                        round
+                    FROM matches
+                    JOIN tournaments ON matches.tournament_id = tournaments.id
+                    WHERE winner_id = %s
+                    AND tournaments.name = %s
+                    AND date < %s
+                    
+                    UNION ALL
+                    
+                    -- Partidos perdidos en este torneo
+                    SELECT 
+                        0 as won,
+                        date,
+                        round
+                    FROM matches
+                    JOIN tournaments ON matches.tournament_id = tournaments.id
+                    WHERE loser_id = %s
+                    AND tournaments.name = %s
+                    AND date < %s
+                )
+                SELECT
+                    COUNT(*) as total_matches,
+                    SUM(won) as wins,
+                    -- Partidos más recientes tienen más peso
+                    SUM(won * (1 / (EXTRACT(YEAR FROM %s) - EXTRACT(YEAR FROM date) + 1))) / 
+                    NULLIF(SUM(1 / (EXTRACT(YEAR FROM %s) - EXTRACT(YEAR FROM date) + 1)), 0) as recent_weighted_win_rate
+                FROM tournament_matches
+                """, (player_id, name, match_date, player_id, name, match_date, match_date, match_date))
+                
+                result = cursor.fetchone()
+                
+                if result and result[0] > 0:
+                    total_matches, wins, recent_weighted_win_rate = result
+                    win_rate = wins / total_matches if total_matches > 0 else 0.5
+                    
+                    return {
+                        'matches_played': total_matches,
+                        'win_rate': win_rate,
+                        'recent_weighted_win_rate': recent_weighted_win_rate if recent_weighted_win_rate is not None else 0.5
+                    }
+                else:
+                    # Sin historial en este torneo
+                    return {
+                        'matches_played': 0,
+                        'win_rate': 0.5,
+                        'recent_weighted_win_rate': 0.5
+                    }
             
-            elo2 = match_data.get('elo_2')
-            if elo2 is None and player2 in self.players_stats:
-                elo2 = self.players_stats[player2].get('elo_rating', 1500)
-            elif elo2 is None:
-                elo2 = 1500
+            # Obtener historial para ambos jugadores
+            p1_history = get_player_tournament_history(player1_id)
+            p2_history = get_player_tournament_history(player2_id)
             
-            features['elo_winner'] = elo1
-            features['elo_loser'] = elo2
+            # Factores adicionales
+            tournament_features = tournament_level_features.copy()
             
-            # ELO por superficie
-            elo_surface1 = match_data.get('elo_surface_1')
-            if elo_surface1 is None and player1 in self.players_stats:
-                elo_surface1 = self.players_stats[player1].get('surface_elo', {}).get(surface, elo1)
-            elif elo_surface1 is None:
-                elo_surface1 = elo1
+            # Añadir historial de torneo
+            tournament_features['p1_tournament_matches'] = p1_history['matches_played']
+            tournament_features['p2_tournament_matches'] = p2_history['matches_played']
+            tournament_features['p1_tournament_win_rate'] = p1_history['win_rate']
+            tournament_features['p2_tournament_win_rate'] = p2_history['win_rate']
+            tournament_features['p1_tournament_recent_win_rate'] = p1_history['recent_weighted_win_rate']
+            tournament_features['p2_tournament_recent_win_rate'] = p2_history['recent_weighted_win_rate']
             
-            elo_surface2 = match_data.get('elo_surface_2')
-            if elo_surface2 is None and player2 in self.players_stats:
-                elo_surface2 = self.players_stats[player2].get('surface_elo', {}).get(surface, elo2)
-            elif elo_surface2 is None:
-                elo_surface2 = elo2
+            # Diferencias
+            tournament_features['tournament_win_rate_diff'] = p1_history['win_rate'] - p2_history['win_rate']
+            tournament_features['tournament_recent_win_rate_diff'] = p1_history['recent_weighted_win_rate'] - p2_history['recent_weighted_win_rate']
+            tournament_features['tournament_experience_diff'] = p1_history['matches_played'] - p2_history['matches_played']
             
-            features['elo_winner_surface'] = elo_surface1
-            features['elo_loser_surface'] = elo_surface2
+            return tournament_features
             
-            # Tasas de victoria
-            winrate1 = match_data.get('winrate_1')
-            if winrate1 is None and player1 in self.players_stats:
-                winrate1 = self.players_stats[player1].get('win_rate', 50)
-            elif winrate1 is None:
-                winrate1 = 50
+        except Exception as e:
+            print(f"Error en extracción de características del torneo: {e}")
+            # Devolver valores por defecto
+            return {
+                'tournament_level_G': 0,
+                'tournament_level_M': 0,
+                'tournament_level_A': 0,
+                'tournament_level_D': 0,
+                'tournament_level_F': 0,
+                'draw_size': 32,
+                'p1_tournament_win_rate': 0.5,
+                'p2_tournament_win_rate': 0.5,
+                'tournament_win_rate_diff': 0
+            }
+        finally:
+            cursor.close()
+            conn.close()
+    
+    def generate_complete_feature_set(self, match_data):
+        """
+        Genera conjunto completo de características para un partido
+        
+        Args:
+            match_data: Dict con datos del partido (player1_id, player2_id, date, tournament_id, surface)
             
-            winrate2 = match_data.get('winrate_2')
-            if winrate2 is None and player2 in self.players_stats:
-                winrate2 = self.players_stats[player2].get('win_rate', 50)
-            elif winrate2 is None:
-                winrate2 = 50
+        Returns:
+            Dict con todas las características
+        """
+        # Extraer datos principales
+        player1_id = match_data['player1_id']
+        player2_id = match_data['player2_id']
+        match_date = match_data['date']
+        tournament_id = match_data.get('tournament_id')
+        surface = match_data.get('surface')
+        
+        # Recopilar todas las características
+        features = {}
+        
+        # Características de H2H
+        h2h_features = self.extract_h2h_features(player1_id, player2_id, match_date, surface)
+        features.update(h2h_features)
+        
+        # Características de estilo
+        style_features = self.extract_player_style_features(player1_id, player2_id)
+        features.update(style_features)
+        
+        # Características temporales
+        temporal_features = self.extract_temporal_features(player1_id, player2_id, match_date, surface)
+        features.update(temporal_features)
+        
+        # Características del torneo
+        if tournament_id:
+            tournament_features = self.extract_tournament_features(tournament_id, player1_id, player2_id, match_date)
+            features.update(tournament_features)
+        
+        # Añadir datos específicos del partido
+        features['surface_hard'] = 1 if surface == 'hard' else 0
+        features['surface_clay'] = 1 if surface == 'clay' else 0
+        features['surface_grass'] = 1 if surface == 'grass' else 0
+        features['surface_carpet'] = 1 if surface == 'carpet' else 0
+        
+        # Información temporal
+        features['month'] = match_date.month
+        features['year'] = match_date.year
+        features['day_of_week'] = match_date.weekday()
+        
+        return features
+    
+    def prepare_features_batch(self, matches_df):
+        """
+        Prepara características para un lote de partidos
+        
+        Args:
+            matches_df: DataFrame con partidos (debe tener player1_id, player2_id, date, etc.)
             
-            features['winrate_1'] = winrate1
-            features['winrate_2'] = winrate2
-            features['winrate_diff'] = winrate1 - winrate2
+        Returns:
+            DataFrame con características completas
+        """
+        all_features = []
+        
+        # Procesar cada partido
+        for idx, row in matches_df.iterrows():
+            # Convertir fila a diccionario
+            match_data = row.to_dict()
+            
+            # Asegurar que los campos necesarios estén presentes
+            if 'winner_id' in match_data and 'loser_id' in match_data:
+                match_data['player1_id'] = match_data['winner_id']
+                match_data['player2_id'] = match_data['loser_id']
+            
+            # Obtener características
+            features = self.generate_complete_feature_set(match_data)
+            
+            # Añadir ID del partido si existe
+            if 'match_id' in match_data:
+                features['match_id'] = match_data['match_id']
+            
+            # Añadir resultado si existe
+            if 'winner_id' in match_data and 'player1_id' in match_data:
+                features['target'] = 1 if match_data['winner_id'] == match_data['player1_id'] else 0
+            
+            all_features.append(features)
+        
+        # Convertir a DataFrame
+        features_df = pd.DataFrame(all_features)
+        
+        # Llenar valores faltantes
+        features_df = features_df.fillna(0)
+        
+        return features_df
+    
+    def normalize_features(self, features_df, scaler=None, fit=True):
+        """
+        Normaliza características numéricas
+        
+        Args:
+            features_df: DataFrame con características
+            scaler: Scaler preentrenado (opcional)
+            fit: Indica si entrenar el scaler (True) o usar uno existente (False)
+            
+        Returns:
+            Tupla (DataFrame normalizado, scaler)
+        """
+        # Hacer copia para no modificar el original
+        df = features_df.copy()
+        
+        # Separar características categóricas
+        categorical_cols = [col for col in df.columns if 
+                           col.startswith('tournament_level_') or 
+                           col.startswith('surface_') or
+                           col in ['same_handed', 'same_backhand', 'p1_left_handed', 'p2_left_handed']]
+        
+        # Separar columnas especiales
+        special_cols = ['match_id', 'target']
+        special_data = df[special_cols].copy() if all(col in df.columns for col in special_cols) else None
+        
+        # Obtener columnas numéricas
+        numeric_cols = [col for col in df.columns if col not in categorical_cols + special_cols]
+        
+        # Crear o usar scaler
+        if scaler is None and fit:
+            scaler = StandardScaler()
+            df[numeric_cols] = scaler.fit_transform(df[numeric_cols])
+        elif scaler is not None:
+            df[numeric_cols] = scaler.transform(df[numeric_cols])
+        
+        # Restaurar columnas especiales si existen
+        if special_data is not None:
+            for col in special_cols:
+                if col in special_data.columns:
+                    df[col] = special_data[col]
+        
+        return df, scaler
+    
+    def select_important_features(self, features_df, importance_threshold=0.005):
+        """
+        Selecciona características importantes según su importancia
+        
+        Args:
+            features_df: DataFrame con características
+            importance_threshold: Umbral mínimo de importancia
+            
+        Returns:
+            DataFrame con características seleccionadas
+        """
+        # Nota: Esta función requiere un modelo entrenado para determinar importancias
+        # Aquí se podría implementar una selección basada en correlación, varianza, etc.
+        
+        # Características que sabemos son importantes basadas en análisis previo
+        important_features = [
+            # ELO (más importantes)
+            'player1_surface_elo', 'player2_surface_elo', 'surface_elo_difference',
+            'player1_elo', 'player2_elo', 'elo_difference',
+            
+            # Rendimiento reciente
+            'p1_form_index', 'p2_form_index', 'form_index_diff',
+            'p1_momentum', 'p2_momentum', 'momentum_diff',
+            
+            # Físicas y estilo
+            'height_diff', 'serve_advantage', 'p1_left_handed', 'p2_left_handed',
+            
+            # H2H
+            'h2h_p1_win_ratio', 'h2h_recent_trend',
+            
+            # Torneo
+            'tournament_level_G', 'tournament_level_M', 'tournament_win_rate_diff',
             
             # Superficie
-            surfaces = {'hard': 0, 'clay': 1, 'grass': 2, 'carpet': 3}
-            features['surface_code'] = surfaces.get(surface, 0)
+            'surface_hard', 'surface_clay', 'surface_grass', 'surface_carpet',
             
-            # Estadísticas por superficie
-            if player1 in self.players_stats and player2 in self.players_stats:
-                p1_surface_stats = self.players_stats[player1].get('surface_stats', {}).get(surface, {})
-                p2_surface_stats = self.players_stats[player2].get('surface_stats', {}).get(surface, {})
-                
-                features['p1_surface_winrate'] = p1_surface_stats.get('win_rate', 50)
-                features['p2_surface_winrate'] = p2_surface_stats.get('win_rate', 50)
-                features['surface_winrate_diff'] = features['p1_surface_winrate'] - features['p2_surface_winrate']
-            else:
-                features['p1_surface_winrate'] = 50
-                features['p2_surface_winrate'] = 50
-                features['surface_winrate_diff'] = 0
-            
-            # Estadísticas head-to-head
-            player_pair = tuple(sorted([player1, player2]))
-            if player_pair in self.head_to_head_stats:
-                h2h = self.head_to_head_stats[player_pair]
-                features['h2h_advantage'] = h2h.get('player1_win_pct', 0.5) - h2h.get('player2_win_pct', 0.5)
-                features['h2h_matches'] = h2h.get('total_matches', 0)
-                
-                # Head-to-head por superficie
-                surface_h2h = h2h.get('surface_stats', {}).get(surface, {})
-                features['h2h_surface_advantage'] = surface_h2h.get('player1_win_pct', 0.5) - surface_h2h.get('player2_win_pct', 0.5)
-            else:
-                features['h2h_advantage'] = 0
-                features['h2h_matches'] = 0
-                features['h2h_surface_advantage'] = 0
-            
-            # Fatiga y descanso
-            if match_date:
-                features['fatigue_diff'] = self._calculate_fatigue(match_data)
-                features['rest_advantage'] = self._calculate_rest_advantage(match_data)
-            
-            # Características físicas
-            features['physical_advantage'] = self._calculate_physical_advantage(match_data)
-            
-            # Características temporales
-            if match_date:
-                features['temporal_advantage'] = self._calculate_time_of_day_advantage(match_data)
-                features['seasonal_advantage'] = self._calculate_seasonal_advantage(match_data)
-            
-            # Experiencia en torneo
-            features['tournament_experience_diff'] = self._calculate_tournament_experience(match_data)
-            
-            # Momentum
-            features['momentum_diff'] = self._calculate_momentum(match_data)
-            
-            # Convertir a DataFrame
-            df_features = pd.DataFrame([features])
-            
-            return df_features
-            
-        except Exception as e:
-            logging.error(f"Error transformando datos del partido: {str(e)}")
-            raise
-    
-    def _get_external_ranking(self, player):
-        """Método para obtener ranking desde fuentes externas."""
-        # Esto sería para implementar integración con APIs externas
-        # Por ahora devolvemos None y usamos valores predeterminados
-        return None
+            # Temporales
+            'month', 'year', 'day_of_week'
+        ]
+        
+        # Asegurar que solo usamos columnas que existen
+        available_features = [col for col in important_features if col in features_df.columns]
+        
+        # Añadir columnas especiales
+        if 'match_id' in features_df.columns:
+            available_features.append('match_id')
+        if 'target' in features_df.columns:
+            available_features.append('target')
+        
+        return features_df[available_features]
 # Funciones mejoradas para compatibilidad con el código antiguo
 def load_model():
     """Carga el modelo entrenado desde el archivo"""
