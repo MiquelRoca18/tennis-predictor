@@ -29,7 +29,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s: %(message)s',
     handlers=[
-        logging.FileHandler('ml-service/logs/elo_system.log'),
+        logging.FileHandler(os.path.join(os.path.dirname(__file__), 'logs/elo_system.log')),
         logging.StreamHandler()
     ]
 )
@@ -168,8 +168,33 @@ class TennisEloSystem:
         data_with_elo['elo_difference'] = data_with_elo['player1_elo'] - data_with_elo['player2_elo']
         data_with_elo['surface_elo_difference'] = data_with_elo['player1_surface_elo'] - data_with_elo['player2_surface_elo']
         
+        # Seleccionar solo las columnas numéricas de ELO para devolver
+        elo_features = data_with_elo[['player1_elo', 'player2_elo', 
+                                     'player1_surface_elo', 'player2_surface_elo',
+                                     'elo_difference', 'surface_elo_difference']]
+        
         self.logger.info("Características ELO calculadas correctamente")
-        return data_with_elo
+        return elo_features
+    
+    def recalculate_all_elo(self):
+        """Recalcula todos los ratings ELO desde cero."""
+        # TO DO: Implementar lógica para recalcular todos los ratings
+        pass
+    
+    def get_elo_ranking(self, surface: str = None, limit: int = 20) -> pd.DataFrame:
+        """Obtiene el ranking ELO de jugadores."""
+        # TO DO: Implementar lógica para obtener el ranking ELO
+        pass
+    
+    def plot_elo_history(self, player_names: List[str], output_path: str, surface: str = None, show_plot: bool = True):
+        """Grafica el historial ELO de jugadores."""
+        # TO DO: Implementar lógica para graficar el historial ELO
+        pass
+    
+    def export_elo_data(self, output_path: str) -> bool:
+        """Exporta los datos ELO a un archivo."""
+        # TO DO: Implementar lógica para exportar los datos ELO
+        pass
 
 def setup_db_schema(connection):
     """

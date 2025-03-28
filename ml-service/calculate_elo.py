@@ -94,8 +94,13 @@ def process_matches(df: pd.DataFrame) -> Tuple[pd.DataFrame, EloSystem]:
     
     for idx, match in df.iterrows():
         # Obtener IDs de jugadores
-        winner_id = str(match['winner'])
-        loser_id = str(match['player_1'] if match['winner'] == match['player_2'] else match['player_2'])
+        winner_id = str(match['winner_id'])
+        
+        # Determinar quién es el perdedor
+        if match['player1_id'] == match['winner_id']:
+            loser_id = str(match['player2_id'])
+        else:
+            loser_id = str(match['player1_id'])
         
         # Guardar ratings actuales
         df.at[idx, 'elo_winner'] = elo_system.get_player_rating(winner_id)

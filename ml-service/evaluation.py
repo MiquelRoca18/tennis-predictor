@@ -19,7 +19,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('ml-service/logs/evaluation.log'),
+        logging.FileHandler('logs/evaluation.log'),
         logging.StreamHandler()
     ]
 )

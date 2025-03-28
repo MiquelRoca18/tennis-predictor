@@ -27,7 +27,7 @@ import tensorflow as tf
 
 from model_ensemble import TennisEnsembleModel, TennisXGBoostModel, TennisNeuralNetwork
 from utils import TennisFeatureEngineering
-from elo_system import TennisELOSystem
+from elo_system import TennisEloSystem
 
 # Configurar logging
 logging.basicConfig(
@@ -66,7 +66,7 @@ def prepare_features(data):
     
     # Características de ELO
     logging.info("Calculando características de ELO...")
-    elo_system = TennisELOSystem()
+    elo_system = TennisEloSystem()
     elo_features = elo_system.calculate_elo_features(df)
     
     # Características temporales
@@ -119,6 +119,14 @@ def prepare_features(data):
     
     # Combinar todas las características
     X = pd.concat(features, axis=1)
+    
+    # Verificar y eliminar columnas no numéricas
+    logging.info("Verificando tipos de datos de las características...")
+    non_numeric_cols = X.select_dtypes(exclude=['number']).columns
+    if len(non_numeric_cols) > 0:
+        logging.warning(f"Se encontraron columnas no numéricas: {non_numeric_cols}")
+        logging.info("Eliminando columnas no numéricas...")
+        X = X.select_dtypes(include=['number'])
     
     logging.info(f"Características preparadas: {X.shape}")
     logging.info(f"Tipos de características: {X.dtypes}")

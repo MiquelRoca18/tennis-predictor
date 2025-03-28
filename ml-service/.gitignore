@@ -8,14 +8,7 @@ __pycache__/
 *.egg
 
 # Entornos virtuales
-venv/
-venv_tf/
-ml-env/
-ml-env-tf2.12/
-.env
-.venv
-env/
-ENV/
+venv-py310/
 
 # IDEs y editores
 .idea/

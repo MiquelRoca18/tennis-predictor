@@ -85,8 +85,16 @@ def balance_data(data, output_path=None):
         # Crear conjunto invertido
         inverted_data = data.copy()
         
+        # Detectar los nombres de columnas de jugadores
+        player1_col = 'player1_id' if 'player1_id' in data.columns else 'player1'
+        player2_col = 'player2_id' if 'player2_id' in data.columns else 'player2'
+        
         # Intercambiar jugadores
-        inverted_data['player1'], inverted_data['player2'] = inverted_data['player2'], inverted_data['player1']
+        inverted_data[player1_col], inverted_data[player2_col] = inverted_data[player2_col], inverted_data[player1_col]
+        
+        # Intercambiar nombres de jugadores si existen
+        if 'player1_name' in inverted_data.columns and 'player2_name' in inverted_data.columns:
+            inverted_data['player1_name'], inverted_data['player2_name'] = inverted_data['player2_name'], inverted_data['player1_name']
         
         # Intercambiar estadísticas correspondientes
         if 'ranking_1' in inverted_data.columns and 'ranking_2' in inverted_data.columns:
@@ -95,6 +103,19 @@ def balance_data(data, output_path=None):
         if 'winrate_1' in inverted_data.columns and 'winrate_2' in inverted_data.columns:
             inverted_data['winrate_1'], inverted_data['winrate_2'] = inverted_data['winrate_2'], inverted_data['winrate_1']
         
+        # Intercambiar otras estadísticas por pares relevantes
+        # Ratings ELO
+        if 'elo_winner' in inverted_data.columns and 'elo_loser' in inverted_data.columns:
+            inverted_data['elo_winner'], inverted_data['elo_loser'] = inverted_data['elo_loser'], inverted_data['elo_winner']
+        
+        # ELO por superficie
+        if 'elo_winner_surface' in inverted_data.columns and 'elo_loser_surface' in inverted_data.columns:
+            inverted_data['elo_winner_surface'], inverted_data['elo_loser_surface'] = inverted_data['elo_loser_surface'], inverted_data['elo_winner_surface']
+        
+        # Actualizar el winner_id
+        if 'winner_id' in inverted_data.columns:
+            inverted_data['winner_id'] = inverted_data[player2_col]
+            
         # Cambiar el valor de winner al opuesto
         inverted_data['winner'] = 1 if only_class == 0 else 0
         
@@ -248,18 +269,28 @@ def visualize_data(data):
     
     print("\nGenerando visualizaciones...")
     
+    # Verificar si existe la columna 'winner' y crearla si no existe
+    if 'winner' not in data.columns and 'winner_id' in data.columns and 'player1_id' in data.columns:
+        print("Creando columna 'winner' a partir de 'winner_id'...")
+        data = data.copy()  # Crear copia para no modificar el original
+        data['winner'] = np.where(data['winner_id'] == data['player1_id'], 0, 1)
+        print(f"Distribución de clases: {data['winner'].value_counts().to_dict()}")
+    
     # Crear directorio para visualizaciones
     vis_dir = "tennis_data_analysis"
     os.makedirs(vis_dir, exist_ok=True)
     
     # 1. Distribución de clases
-    plt.figure(figsize=(10, 6))
-    sns.countplot(x='winner', data=data)
-    plt.title('Distribución de Variable Objetivo (winner)')
-    plt.xlabel('Ganador (0=player1, 1=player2)')
-    plt.ylabel('Cantidad de Partidos')
-    plt.savefig(os.path.join(vis_dir, 'class_distribution.png'))
-    plt.close()
+    if 'winner' in data.columns:
+        plt.figure(figsize=(10, 6))
+        sns.countplot(x='winner', data=data)
+        plt.title('Distribución de Variable Objetivo (winner)')
+        plt.xlabel('Ganador (0=player1, 1=player2)')
+        plt.ylabel('Cantidad de Partidos')
+        plt.savefig(os.path.join(vis_dir, 'class_distribution.png'))
+        plt.close()
+    else:
+        print("¡Advertencia! No se pudo generar el gráfico de distribución de clases porque no existe la columna 'winner'")
     
     # 2. Distribución por superficie
     if 'surface' in data.columns:
@@ -394,6 +425,11 @@ def main():
     
     # Analizar distribución de clases
     if 'winner' in data.columns:
+        analyze_classes(data)
+    elif 'winner_id' in data.columns and 'player1_id' in data.columns:
+        print("\nCreando columna 'winner' a partir de 'winner_id'...")
+        data = data.copy()
+        data['winner'] = np.where(data['winner_id'] == data['player1_id'], 0, 1)
         analyze_classes(data)
     elif 'winner_name' in data.columns and 'loser_name' in data.columns:
         print("\nDetectado formato Jeff Sackmann (winner_name/loser_name)")
