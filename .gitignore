@@ -59,7 +59,4 @@ feature_group_importance.png
 .DS_Store
 EOL
 
-guia-proyecto-tenis.md
-project-installation.md
-tennis-ml-comprehensive-guide.md
-guia-prompts-mejora-tenis.md
+*.md

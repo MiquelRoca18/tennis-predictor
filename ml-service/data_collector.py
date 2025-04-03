@@ -383,6 +383,18 @@ class TennisDataCollector:
         """
         rankings_structure = {}
         
+        # Verificar directamente el archivo de rankings actuales en la raíz
+        current_rankings_url = f"{self.repo_base_url}{self.repo_structure[tour]['main']}/{tour}_rankings_current.csv"
+        if self._check_file_exists(current_rankings_url):
+            rankings_structure['format'] = 'root'
+            rankings_structure['filename'] = f"{tour}_rankings_current.csv"
+            rankings_structure['url'] = current_rankings_url
+            logger.info(f"Rankings {tour.upper()} actuales disponibles en la raíz: {tour}_rankings_current.csv")
+            return rankings_structure
+        
+        # El resto del código puede permanecer igual, ya que es una buena red de seguridad
+        # para encontrar rankings en otras ubicaciones posibles
+        
         # Comprobar si existe el directorio de rankings
         rankings_dir = f"{self.repo_base_url}{self.repo_structure[tour]['rankings_dir']}"
         
@@ -428,8 +440,24 @@ class TennisDataCollector:
             f"{tour}_rankings_all.csv",
             "rankings.csv",
             "rankings_all.csv",
-            f"{tour}_rankings_current.csv"
+            f"{tour}_rankings_current.csv",
+            "rankings_archive.csv",
+            f"{tour}_rankings_archive.csv",
+            f"{tour}_rankings_history.csv"
         ]
+
+        additional_urls = [
+            f"https://raw.githubusercontent.com/JeffSackmann/tennis_{tour}/master/rankings_archive/{tour}_rankings_all.csv",
+            f"https://raw.githubusercontent.com/JeffSackmann/tennis_{tour}/master/rankings/{tour}_rankings_all.csv",
+            f"https://raw.githubusercontent.com/JeffSackmann/tennis_{tour}/master/rankings/current.csv"
+        ]
+
+        for url in additional_urls:
+            if self._check_file_exists(url):
+                rankings_structure['format'] = 'external'
+                rankings_structure['url'] = url
+                logger.info(f"Rankings {tour.upper()} disponibles en URL externa: {url}")
+                break
         
         for filename in consolidated_formats:
             url = f"{rankings_dir}/{filename}"
@@ -738,130 +766,141 @@ class TennisDataCollector:
             return pd.DataFrame()
         
     
-    def _download_rankings_for_year(self, year: int, tour: str) -> pd.DataFrame:
+    def _download_rankings_data(self, tour: str) -> pd.DataFrame:
         """
-        Descarga rankings para un año específico usando la estructura detectada.
-        
-        Args:
-            year: Año de los rankings a descargar
-            tour: Tour de tenis ('atp' o 'wta')
-            
-        Returns:
-            DataFrame con rankings del año
+        Descarga y procesa datos de rankings directamente desde la raíz del repositorio.
         """
         if not self.include_rankings:
+            logger.info(f"Descarga de rankings desactivada para {tour.upper()}")
             return pd.DataFrame()
         
-        if tour not in self.repo_structure:
-            logger.error(f"Tour no soportado: {tour}")
-            return pd.DataFrame()
+        logger.info(f"=== Descargando archivos de rankings para {tour.upper()} ===")
         
-        try:
-            # Verificar la estructura de rankings si aún no lo hemos hecho
-            if not hasattr(self, 'rankings_structure'):
-                self.rankings_structure = {}
+        # URL base del repositorio
+        base_url = f"https://raw.githubusercontent.com/JeffSackmann/tennis_{tour}/master"
+        
+        # DataFrame para almacenar todos los rankings
+        all_rankings = pd.DataFrame()
+        
+        # Lista de archivos de décadas que debemos intentar descargar
+        decade_files = [
+            f"{tour}_rankings_00s.csv",
+            f"{tour}_rankings_10s.csv",
+            f"{tour}_rankings_20s.csv",
+            f"{tour}_rankings_current.csv"
+        ]
+        
+        # Descargar cada archivo de rankings
+        for decade_file in decade_files:
+            url = f"{base_url}/{decade_file}"
             
-            if tour not in self.rankings_structure:
-                self.rankings_structure[tour] = self._check_rankings_structure(tour)
-            
-            # Si no se pudo determinar la estructura, intentar búsqueda avanzada
-            if not self.rankings_structure[tour]:
-                logger.warning(f"No se pudo determinar la estructura estándar de rankings para {tour.upper()}")
-                logger.info(f"Intentando búsqueda avanzada de rankings para {tour.upper()} {year}...")
-                year_rankings = self._search_rankings_advanced(tour, year)
+            if self._check_file_exists(url):
+                logger.info(f"Descargando archivo de rankings: {decade_file}")
                 
-                if not year_rankings.empty:
-                    # Guardar en directorio de salida
-                    output_file = self.output_dir / tour / f"{tour}_rankings_{year}.csv"
-                    year_rankings.to_csv(output_file, index=False)
+                # Crear ruta de caché
+                cache_file = self.cache_dir / tour / 'rankings' / decade_file
+                cache_file.parent.mkdir(exist_ok=True)
+                
+                try:
+                    # Descargar el archivo directamente sin pasar por _download_file para manejo especializado
+                    response = self._make_request(url)
+                    content = response.content.decode('utf-8')
                     
-                    # Información
-                    dates_count = year_rankings['ranking_date'].nunique() if 'ranking_date' in year_rankings.columns else 0
-                    logger.info(f"Rankings de {tour.upper()} {year} guardados (vía búsqueda avanzada): {len(year_rankings)} registros de {dates_count} fechas")
+                    # Guardar copia en caché
+                    with open(cache_file, 'w') as f:
+                        f.write(content)
                     
-                    return year_rankings
-                else:
-                    logger.warning(f"No se encontraron rankings para {tour.upper()} {year} en búsqueda avanzada")
-                    return pd.DataFrame()
-            
-            # Intentar descargar rankings según el formato detectado
-            format_type = self.rankings_structure[tour].get('format')
-            
-            if format_type == 'weekly':
-                # Para formato semanal, necesitamos encontrar fechas disponibles para el año
-                year_rankings = self._download_weekly_rankings(year, tour)
-            elif format_type == 'decade':
-                # Para formato por década, necesitamos encontrar el archivo apropiado y filtrar
-                decade = self._get_decade_for_year(year)
-                if decade in self.rankings_structure[tour].get('decades', []):
-                    year_rankings = self._download_decade_rankings_and_filter(year, decade, tour)
-                else:
-                    logger.warning(f"No hay rankings disponibles para la década {decade} ({tour.upper()})")
+                    # Leer el CSV
+                    df = pd.read_csv(StringIO(content))
                     
-                    # Intentar con búsqueda avanzada como respaldo
-                    logger.info(f"Intentando búsqueda avanzada para rankings {tour.upper()} {year}...")
-                    year_rankings = self._search_rankings_advanced(tour, year)
-                    
-                    if year_rankings.empty:
-                        logger.warning(f"No se encontraron rankings para {tour.upper()} {year} en búsqueda avanzada")
-                        return pd.DataFrame()
-            elif format_type == 'consolidated' or format_type == 'root':
-                # Para formato consolidado, descargamos todo y filtramos
-                year_rankings = self._download_consolidated_rankings_and_filter(year, tour, format_type)
-            else:
-                logger.warning(f"Formato de rankings no reconocido para {tour.upper()}")
-                
-                # Intentar con búsqueda avanzada como respaldo
-                logger.info(f"Intentando búsqueda avanzada para rankings {tour.upper()} {year}...")
-                year_rankings = self._search_rankings_advanced(tour, year)
-                
-                if year_rankings.empty:
-                    logger.warning(f"No se encontraron rankings para {tour.upper()} {year} en búsqueda avanzada")
-                    return pd.DataFrame()
+                    if not df.empty:
+                        # Asegurarse de que todos los datos tienen la columna 'tour'
+                        df['tour'] = tour
+                        
+                        # IMPORTANTE: No intentar convertir o filtrar por fecha todavía
+                        # Simplemente guardar todos los datos
+                        all_rankings = pd.concat([all_rankings, df], ignore_index=True)
+                        logger.info(f"Añadidos {len(df)} registros de rankings de {decade_file}")
+                except Exception as e:
+                    logger.warning(f"Error procesando {decade_file}: {str(e)}")
+        
+        # Guardar el archivo sin filtrar primero
+        if not all_rankings.empty:
+            # Guardar una copia completa sin filtrar
+            output_file_all = self.output_dir / tour / f"{tour}_rankings_all.csv"
+            all_rankings.to_csv(output_file_all, index=False)
+            logger.info(f"Guardados {len(all_rankings)} registros de rankings completos para {tour.upper()} en {output_file_all}")
             
-            # Si no hay rankings para este año
-            if year_rankings.empty:
-                logger.warning(f"No se encontraron rankings específicamente para {tour.upper()} {year}")
-                
-                # Intentar con búsqueda avanzada como último recurso
-                logger.info(f"Intentando búsqueda avanzada como último recurso para rankings {tour.upper()} {year}...")
-                year_rankings = self._search_rankings_advanced(tour, year)
-                
-                if year_rankings.empty:
-                    logger.warning(f"No se encontraron rankings para {tour.upper()} {year} en búsqueda avanzada final")
-                    return pd.DataFrame()
-            
-            # Guardar en directorio de salida
-            output_file = self.output_dir / tour / f"{tour}_rankings_{year}.csv"
-            year_rankings.to_csv(output_file, index=False)
-            
-            # Información
-            dates_count = year_rankings['ranking_date'].nunique() if 'ranking_date' in year_rankings.columns else 0
-            logger.info(f"Rankings de {tour.upper()} {year} guardados: {len(year_rankings)} registros de {dates_count} fechas")
-            
-            return year_rankings
-            
-        except Exception as e:
-            logger.error(f"Error descargando rankings de {tour.upper()} {year}: {str(e)}")
-            logger.info(f"Intentando búsqueda avanzada tras error para rankings {tour.upper()} {year}...")
-            
+            # Intentar filtrar por fecha ahora, pero si falla, al menos tenemos el archivo completo
             try:
-                year_rankings = self._search_rankings_advanced(tour, year)
-                
-                if not year_rankings.empty:
-                    # Guardar en directorio de salida
-                    output_file = self.output_dir / tour / f"{tour}_rankings_{year}.csv"
-                    year_rankings.to_csv(output_file, index=False)
+                if 'ranking_date' in all_rankings.columns:
+                    # Primero verificar el formato de fecha que tienen los archivos
+                    sample_date = all_rankings['ranking_date'].iloc[0] if len(all_rankings) > 0 else None
+                    logger.info(f"Muestra de fecha en rankings: {sample_date}")
                     
-                    # Información
-                    dates_count = year_rankings['ranking_date'].nunique() if 'ranking_date' in year_rankings.columns else 0
-                    logger.info(f"Rankings de {tour.upper()} {year} guardados (tras error): {len(year_rankings)} registros de {dates_count} fechas")
+                    # Probamos diferentes formatos de fecha
+                    filtered_rankings = pd.DataFrame()
                     
-                    return year_rankings
-            except Exception as e2:
-                logger.error(f"Error en búsqueda avanzada de rankings {tour.upper()} {year}: {str(e2)}")
-            
-            return pd.DataFrame()
+                    # Intentar varias estrategias de filtrado por año
+                    # 1. Si la fecha ya está en formato YYYY-MM-DD
+                    if re.match(r'\d{4}-\d{2}-\d{2}', str(sample_date)):
+                        all_rankings['ranking_date'] = pd.to_datetime(all_rankings['ranking_date'])
+                        filtered_rankings = all_rankings[(all_rankings['ranking_date'].dt.year >= self.start_year) & 
+                                                        (all_rankings['ranking_date'].dt.year <= self.end_year)]
+                        logger.info(f"Filtrado por formato YYYY-MM-DD")
+                    
+                    # 2. Si la fecha está en otro formato como YYYYMMDD
+                    elif re.match(r'\d{8}', str(sample_date)):
+                        all_rankings['year'] = all_rankings['ranking_date'].astype(str).str[:4].astype(int)
+                        filtered_rankings = all_rankings[(all_rankings['year'] >= self.start_year) & 
+                                                        (all_rankings['year'] <= self.end_year)]
+                        logger.info(f"Filtrado por formato YYYYMMDD")
+                    
+                    # 3. Si la fecha está en otro formato o es un string, intentar extraer el año
+                    else:
+                        # Intentar varios formatos de fecha comunes
+                        date_formats = ['%Y%m%d', '%Y-%m-%d', '%d-%m-%Y', '%m/%d/%Y', '%d/%m/%Y']
+                        for date_format in date_formats:
+                            try:
+                                all_rankings['date_temp'] = pd.to_datetime(all_rankings['ranking_date'], format=date_format)
+                                all_rankings['year'] = all_rankings['date_temp'].dt.year
+                                filtered_rankings = all_rankings[(all_rankings['year'] >= self.start_year) & 
+                                                                (all_rankings['year'] <= self.end_year)]
+                                if not filtered_rankings.empty:
+                                    logger.info(f"Filtrado por formato {date_format}")
+                                    break
+                            except:
+                                continue
+                    
+                    # Si ninguno de los formatos anteriores funcionó, intentar extraer el año usando regex
+                    if filtered_rankings.empty:
+                        all_rankings['year'] = all_rankings['ranking_date'].astype(str).str.extract(r'(\d{4})').astype(int)
+                        filtered_rankings = all_rankings[(all_rankings['year'] >= self.start_year) & 
+                                                        (all_rankings['year'] <= self.end_year)]
+                        logger.info(f"Filtrado por extracción de año usando regex")
+                    
+                    # Si aún así no funciona, guardar todo sin filtrar
+                    if filtered_rankings.empty:
+                        logger.warning(f"No se pudo filtrar por año, guardando todos los rankings disponibles")
+                        filtered_rankings = all_rankings
+                    
+                    # Guardar el archivo filtrado
+                    output_file = self.output_dir / tour / f"{tour}_rankings_{self.start_year}_{self.end_year}.csv"
+                    filtered_rankings.to_csv(output_file, index=False)
+                    logger.info(f"Guardados {len(filtered_rankings)} registros de rankings filtrados para {tour.upper()} en {output_file}")
+                    
+                    return filtered_rankings
+                else:
+                    logger.warning(f"No hay columna 'ranking_date' en los rankings, guardando todos sin filtrar")
+                    return all_rankings
+            except Exception as e:
+                logger.warning(f"Error al filtrar rankings por fecha: {str(e)}")
+                logger.info(f"Guardando todos los rankings sin filtrar")
+                return all_rankings
+        else:
+            logger.warning(f"No se encontraron rankings para {tour.upper()}")
+        
+        return all_rankings
 
     def _download_weekly_rankings(self, year: int, tour: str) -> pd.DataFrame:
         """
@@ -1573,7 +1612,8 @@ class TennisDataCollector:
             'players': {},
             'rankings': {},
             'slam_pointbypoint': {},
-            'match_charting': {}
+            'match_charting': {},
+            'pointbypoint': {}
         }
         
         # Para cada tour
@@ -1635,518 +1675,2624 @@ class TennisDataCollector:
             
             # 5. Recopilar rankings si se solicitaron
             if self.include_rankings:
-                rankings_frames = []
-                
-                for year in range(self.start_year, self.end_year + 1):
-                    df = self._download_rankings_for_year(year, tour)
-                    if not df.empty:
-                        rankings_frames.append(df)
-                
-                if rankings_frames:
-                    results['rankings'][tour] = pd.concat(rankings_frames, ignore_index=True)
+                # Usar el método mejorado para obtener todos los tipos de archivos de ranking
+                for tour in self.tours:
+                    rankings_df = self._download_rankings_data(tour)
                     
-                    # Guardar rankings
-                    output_file = self.output_dir / tour / f"{tour}_rankings_all_{self.start_year}_{self.end_year}.csv"
-                    results['rankings'][tour].to_csv(output_file, index=False)
-                    logger.info(f"Rankings de {tour.upper()} guardados en {output_file}: {len(results['rankings'][tour])} registros")
+                    if not rankings_df.empty:
+                        results['rankings'][tour] = rankings_df
+                        
+                        # Guardar rankings
+                        output_file = self.output_dir / tour / f"{tour}_rankings_all_{self.start_year}_{self.end_year}.csv"
+                        results['rankings'][tour].to_csv(output_file, index=False)
+                        
+                        # Total de fechas únicas
+                        unique_dates = rankings_df['ranking_date'].nunique() if 'ranking_date' in rankings_df.columns else 0
+                        
+                        logger.info(f"Rankings de {tour.upper()} guardados en {output_file}: {len(rankings_df)} registros, {unique_dates} fechas únicas")
+                    else:
+                        logger.warning(f"No se encontraron rankings para {tour.upper()} en el rango de años {self.start_year}-{self.end_year}")
         
         # 6. Recopilar datos del Match Charting Project si se solicitaron y el repositorio está disponible
-        if self.include_match_charting and 'tennis_MatchChartingProject' in self.available_repos:
-            logger.info("=== Recopilando datos del Match Charting Project ===")
+        if self.include_match_charting:
+            logger.info("=== Recopilando datos del Match Charting Project de forma exhaustiva ===")
+            # Usar el nuevo método mejorado en lugar del anterior
+            match_charting_results = self.collect_match_charting_data()
+            results['match_charting'] = match_charting_results
             
-            # Verificar primero estructura real del repositorio
-            mcp_files = self._find_match_charting_files()
-            
-            if mcp_files:
-                for file_info in mcp_files:
-                    df = self._download_match_charting_data_robust(file_info['name'], file_info['url'])
-                    if not df.empty:
-                        results['match_charting'][file_info['name']] = df
+            # Calcular estadísticas para el resumen
+            if match_charting_results:
+                # Categorizar archivos por tipo para mostrar en el resumen
+                matches_count = sum(1 for name in match_charting_results.keys() 
+                                if 'match' in name.lower() and 'stat' not in name.lower())
+                shots_count = sum(1 for name in match_charting_results.keys() 
+                                if 'shot' in name.lower())
+                stats_count = sum(1 for name in match_charting_results.keys() 
+                                if 'stat' in name.lower())
+                other_count = len(match_charting_results) - matches_count - shots_count - stats_count
+                
+                logger.info(f"Recopilados {len(match_charting_results)} archivos del Match Charting Project:")
+                logger.info(f"  - Archivos de partidos: {matches_count}")
+                logger.info(f"  - Archivos de tiros: {shots_count}")
+                logger.info(f"  - Archivos de estadísticas: {stats_count}")
+                logger.info(f"  - Otros archivos: {other_count}")
+                
+                # Verificar si se crearon archivos combinados
+                combined_files = [name for name in match_charting_results.keys() 
+                                if name.startswith('all_') and name.endswith('_combined')]
+                if combined_files:
+                    logger.info(f"Se crearon {len(combined_files)} archivos combinados")
+                    for name in combined_files:
+                        logger.info(f"  - {name}: {len(match_charting_results[name])} registros")
             else:
-                # Si no encontramos archivos con la primera búsqueda, intentar una búsqueda más exhaustiva
-                logger.info("Realizando búsqueda exhaustiva de archivos del Match Charting Project...")
+                logger.warning("No se pudieron encontrar datos del Match Charting Project")
+
+        # 7. Para datos punto por punto de Grand Slam
+        if self.include_slam_pointbypoint:
+            logger.info("=== Recopilando datos punto por punto de Grand Slam de manera exhaustiva ===")
+            # Usar el método mejorado que implementa múltiples estrategias de búsqueda
+            slam_pointbypoint_results = self._download_slam_pointbypoint_data()
+            results['slam_pointbypoint'] = slam_pointbypoint_results
+            
+            # Mostrar estadísticas relevantes
+            if slam_pointbypoint_results:
+                # Contar archivos por torneo
+                tournament_counts = {}
+                year_counts = {}
+                total_records = 0
                 
-                base_url = f"{self.repo_base_url}{self.match_charting_structure['repo']}"
-                
-                # Buscar en posibles ubicaciones adicionales
-                extra_locations = [
-                    "data", "raw_data", "csv", "data/csv", "data/processed", 
-                    "processed", "datasets", "match_data", "stats"
-                ]
-                
-                for location in extra_locations:
-                    location_url = f"{base_url}/{location}"
+                for name, df in slam_pointbypoint_results.items():
+                    total_records += len(df)
                     
-                    # Buscar archivos principales en esta ubicación
-                    for filename in list(self.match_charting_structure['files'].values()) + self.match_charting_structure['alt_files']:
-                        file_url = f"{location_url}/{filename}"
+                    # Contar por torneo
+                    tournament = None
+                    if 'tournament' in df.columns and len(df) > 0:
+                        tournament = df['tournament'].iloc[0]
+                    elif 'slam' in df.columns and len(df) > 0:
+                        tournament = df['slam'].iloc[0]
+                    else:
+                        # Intentar extraer del nombre
+                        for t in ["australian_open", "french_open", "wimbledon", "us_open"]:
+                            if t in name:
+                                tournament = t
+                                break
+                    
+                    if tournament:
+                        if tournament not in tournament_counts:
+                            tournament_counts[tournament] = 0
+                        tournament_counts[tournament] += 1
+                    
+                    # Contar por año
+                    year = None
+                    if 'year' in df.columns and len(df) > 0:
+                        year = str(df['year'].iloc[0])
+                    else:
+                        # Intentar extraer del nombre
+                        for y in range(1990, 2025):
+                            if str(y) in name:
+                                year = str(y)
+                                break
+                    
+                    if year:
+                        if year not in year_counts:
+                            year_counts[year] = 0
+                        year_counts[year] += 1
+                
+                # Nombres legibles para torneos
+                tournament_readable = {
+                    "australian_open": "Australian Open",
+                    "french_open": "French Open (Roland Garros)",
+                    "wimbledon": "Wimbledon",
+                    "us_open": "US Open"
+                }
+                
+                # Mostrar resumen completo
+                logger.info(f"Recopilados {len(slam_pointbypoint_results)} archivos punto por punto de Grand Slam con {total_records:,} registros totales")
+                
+                # Mostrar por torneo
+                if tournament_counts:
+                    logger.info("Archivos por torneo:")
+                    for tournament, count in tournament_counts.items():
+                        readable = tournament_readable.get(tournament, tournament)
+                        logger.info(f"  - {readable}: {count} archivos")
+                
+                # Mostrar por año
+                if year_counts:
+                    sorted_years = sorted(year_counts.keys())
+                    years_info = ", ".join(f"{y}: {year_counts[y]}" for y in sorted_years)
+                    logger.info(f"Archivos por año: {years_info}")
+                
+                # Verificar si se crearon archivos combinados
+                combined_files = [name for name in slam_pointbypoint_results.keys() if 'combined' in name.lower()]
+                if combined_files:
+                    logger.info(f"Se crearon {len(combined_files)} archivos combinados de datos punto por punto de Grand Slam")
+            else:
+                logger.warning("No se pudieron encontrar datos punto por punto de Grand Slam")
+
+        # 8. Para datos punto por punto
+        if self.include_pointbypoint:
+            logger.info("=== Recopilando datos punto por punto de manera exhaustiva ===")
+            # Usar el método mejorado que implementa múltiples estrategias de búsqueda
+            pointbypoint_results = self._download_pointbypoint_data()
+            results['pointbypoint'] = pointbypoint_results
+            
+            # Mostrar estadísticas relevantes
+            if pointbypoint_results:
+                # Contar tipos de archivos para el resumen
+                points_files = sum(1 for name in pointbypoint_results.keys() if 'point' in name.lower())
+                matches_files = sum(1 for name in pointbypoint_results.keys() if 'match' in name.lower() and 'point' not in name.lower())
+                stats_files = sum(1 for name in pointbypoint_results.keys() if 'stat' in name.lower())
+                rally_files = sum(1 for name in pointbypoint_results.keys() if 'rally' in name.lower())
+                other_files = len(pointbypoint_results) - points_files - matches_files - stats_files - rally_files
+                
+                # Contar registros totales
+                total_records = sum(len(df) for df in pointbypoint_results.values())
+                
+                # Identificar torneos y años disponibles
+                tournaments = set()
+                years = set()
+                
+                for df in pointbypoint_results.values():
+                    if 'tournament' in df.columns and len(df) > 0:
+                        tournaments.update(df['tournament'].unique())
+                    if 'year' in df.columns and len(df) > 0:
+                        years.update(df['year'].unique())
+                
+                logger.info(f"Recopilados {len(pointbypoint_results)} archivos punto por punto con {total_records:,} registros totales:")
+                logger.info(f"  - Archivos de puntos: {points_files}")
+                logger.info(f"  - Archivos de partidos: {matches_files}")
+                logger.info(f"  - Archivos de estadísticas: {stats_files}")
+                logger.info(f"  - Archivos de rallies: {rally_files}")
+                logger.info(f"  - Otros archivos: {other_files}")
+                
+                if tournaments:
+                    logger.info(f"  - Torneos disponibles: {', '.join(str(t) for t in sorted(tournaments))}")
+                if years:
+                    logger.info(f"  - Años disponibles: {', '.join(str(y) for y in sorted(years))}")
+                
+                # Verificar si se crearon archivos combinados
+                combined_files = [name for name in pointbypoint_results.keys() if 'combined' in name.lower()]
+                if combined_files:
+                    logger.info(f"Se crearon {len(combined_files)} archivos combinados de datos punto por punto")
+            else:
+                logger.warning("No se pudieron encontrar datos punto por punto")
+            
+        # 9. Crear archivos combinados
+        self._create_combined_files(results)
+            
+        return results
+    
+    def _download_slam_pointbypoint_data(self) -> Dict[str, pd.DataFrame]:
+        """
+        Descarga datos punto por punto de torneos Grand Slam de manera exhaustiva.
+        
+        Implementa múltiples estrategias para encontrar todos los archivos disponibles
+        en el repositorio tennis_slam_pointbypoint, considerando diferentes estructuras
+        y convenciones de nomenclatura.
+        
+        Returns:
+            Dict[str, pd.DataFrame]: Diccionario con todos los datos recopilados
+        """
+        results = {}
+        
+        # URL base del repositorio oficial
+        base_url = "https://raw.githubusercontent.com/JeffSackmann/tennis_slam_pointbypoint/master"
+        
+        logger.info("=== Iniciando recopilación exhaustiva de datos punto por punto de Grand Slam ===")
+        
+        # Verificar si podemos acceder al repositorio
+        readme_url = f"{base_url}/README.md"
+        if not self._check_file_exists(readme_url):
+            logger.warning("No se puede acceder al repositorio de datos punto por punto de Grand Slam.")
+            return results
+        
+        # 1. ESTRUCTURA DEL REPOSITORIO
+        # Este repositorio tiene varias posibles estructuras:
+        # - Archivos principales en la raíz: /usopen_points_YYYY.csv
+        # - Por torneo: /usopen/points_YYYY.csv o /usopen/YYYY.csv o /usopen/YYYY_points.csv
+        # - Por torneo/año: /usopen/2019/points.csv
+        # - Por año/torneo: /2019/usopen/points.csv
+        
+        # 1.1 Mapeo de variantes de nombres de torneos a nombres canónicos
+        tournament_mappings = {
+            # Australian Open
+            "ausopen": "australian_open",
+            "australian_open": "australian_open",
+            "australian-open": "australian_open", 
+            "ao": "australian_open",
+            "australia": "australian_open",
+            "melbourne": "australian_open",
+            # French Open / Roland Garros
+            "frenchopen": "french_open",
+            "french_open": "french_open",
+            "french-open": "french_open",
+            "fo": "french_open",
+            "rg": "french_open",
+            "roland_garros": "french_open",
+            "roland-garros": "french_open",
+            "rolandgarros": "french_open",
+            "paris": "french_open",
+            # Wimbledon
+            "wimbledon": "wimbledon",
+            "wim": "wimbledon",
+            "london": "wimbledon",
+            # US Open
+            "usopen": "us_open",
+            "us_open": "us_open",
+            "us-open": "us_open",
+            "uso": "us_open",
+            "newyork": "us_open",
+            "flushing": "us_open"
+        }
+        
+        # 1.2 Torneo a nombre legible
+        tournament_readable = {
+            "australian_open": "Australian Open",
+            "french_open": "French Open (Roland Garros)",
+            "wimbledon": "Wimbledon",
+            "us_open": "US Open"
+        }
+        
+        # 1.3 Años para buscar
+        years = list(range(2000, 2025))  # Ajustar según necesidad
+        
+        # 2. BUSCAR ARCHIVOS EN LA RAÍZ DEL REPOSITORIO
+        logger.info("Buscando archivos en la raíz del repositorio...")
+        
+        # 2.1 Patrones de archivos en la raíz
+        root_patterns = [
+            "{tournament}_points_{year}.csv",
+            "{tournament}_{year}_points.csv",
+            "{tournament}_{year}.csv",
+            "{year}_{tournament}_points.csv",
+            "{year}_{tournament}.csv",
+            "slam_pointbypoint_{tournament}_{year}.csv"
+        ]
+        
+        for tournament_code in tournament_mappings.keys():
+            canonical_name = tournament_mappings[tournament_code]
+            
+            for year in years:
+                for pattern in root_patterns:
+                    # Generar nombre de archivo según el patrón
+                    file_name = pattern.format(tournament=tournament_code, year=year)
+                    file_url = f"{base_url}/{file_name}"
+                    
+                    if self._check_file_exists(file_url):
+                        logger.info(f"Encontrado archivo en raíz: {file_name}")
+                        
+                        # Descargar el archivo
+                        output_name = f"{canonical_name}_{year}_points"
+                        cache_file = self.cache_dir / 'slam_pointbypoint' / f"{output_name}.csv"
+                        output_file = self.output_dir / 'slam_pointbypoint' / f"{output_name}.csv"
+                        
+                        try:
+                            response = self._make_request(file_url)
+                            content = response.content.decode('utf-8')
+                            df = pd.read_csv(StringIO(content))
+                            
+                            # Añadir metadatos si no existen
+                            if 'tournament' not in df.columns:
+                                df['tournament'] = canonical_name
+                            if 'year' not in df.columns:
+                                df['year'] = year
+                            if 'slam' not in df.columns:
+                                df['slam'] = canonical_name
+                            
+                            # Guardar archivos
+                            cache_file.parent.mkdir(exist_ok=True)
+                            output_file.parent.mkdir(exist_ok=True)
+                            
+                            df.to_csv(cache_file, index=False)
+                            df.to_csv(output_file, index=False)
+                            
+                            results[output_name] = df
+                            logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                        except Exception as e:
+                            logger.warning(f"Error procesando {file_url}: {str(e)}")
+        
+        # 3. BUSCAR ARCHIVOS EN ESTRUCTURA DE DIRECTORIO POR TORNEO
+        logger.info("Buscando archivos en estructura de directorios por torneo...")
+        
+        # 3.1 Patrones de archivos dentro de directorios de torneo
+        tournament_patterns = [
+            "points_{year}.csv",
+            "{year}_points.csv",
+            "{year}.csv",
+            "points/{year}.csv",
+            "data/{year}.csv",
+            "{year}/points.csv",
+            "{year}/matches.csv",
+            "{year}/all_points.csv"
+        ]
+        
+        for tournament_code in tournament_mappings.keys():
+            canonical_name = tournament_mappings[tournament_code]
+            tournament_dir = f"{tournament_code}/"
+            tournament_url = f"{base_url}/{tournament_dir}"
+            
+            # Verificar si existe el directorio de torneo con algún archivo conocido
+            dir_exists = False
+            for test_file in ["README.md", "index.html", "points.csv"]:
+                if self._check_file_exists(f"{tournament_url}{test_file}"):
+                    dir_exists = True
+                    logger.info(f"Encontrado directorio para torneo: {tournament_code}")
+                    break
+                    
+            if dir_exists:
+                # Buscar archivos por año en este directorio de torneo
+                for year in years:
+                    for pattern in tournament_patterns:
+                        # Generar nombre de archivo según el patrón
+                        file_path = pattern.format(year=year)
+                        file_url = f"{tournament_url}{file_path}"
                         
                         if self._check_file_exists(file_url):
-                            file_key = filename.replace('.csv', '')
-                            logger.info(f"Encontrado archivo del Match Charting Project en ubicación alternativa: {location}/{filename}")
+                            logger.info(f"Encontrado archivo: {tournament_dir}{file_path}")
                             
-                            df = self._download_match_charting_data_robust(file_key, file_url)
-                            if not df.empty:
-                                results['match_charting'][file_key] = df
+                            # Descargar el archivo
+                            output_name = f"{canonical_name}_{year}_points_v2"
+                            cache_file = self.cache_dir / 'slam_pointbypoint' / f"{output_name}.csv"
+                            output_file = self.output_dir / 'slam_pointbypoint' / f"{output_name}.csv"
+                            
+                            try:
+                                response = self._make_request(file_url)
+                                content = response.content.decode('utf-8')
+                                df = pd.read_csv(StringIO(content))
+                                
+                                # Añadir metadatos si no existen
+                                if 'tournament' not in df.columns:
+                                    df['tournament'] = canonical_name
+                                if 'year' not in df.columns:
+                                    df['year'] = year
+                                if 'slam' not in df.columns:
+                                    df['slam'] = canonical_name
+                                
+                                # Guardar archivos
+                                cache_file.parent.mkdir(exist_ok=True)
+                                output_file.parent.mkdir(exist_ok=True)
+                                
+                                df.to_csv(cache_file, index=False)
+                                df.to_csv(output_file, index=False)
+                                
+                                results[output_name] = df
+                                logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                            except Exception as e:
+                                logger.warning(f"Error procesando {file_url}: {str(e)}")
                 
-                if not results['match_charting']:
-                    logger.warning("No se encontraron archivos del Match Charting Project")
-        
-        # 7. Recopilar datos punto por punto de Grand Slam si se solicitaron y el repositorio está disponible
-        if self.include_slam_pointbypoint and 'tennis_slam_pointbypoint' in self.available_repos:
-            logger.info("=== Recopilando datos punto por punto de Grand Slam ===")
-            
-            # Verificar primero estructura real del repositorio
-            slam_files = self._find_slam_pointbypoint_files()
-            
-            if slam_files:
-                for file_info in slam_files:
-                    df = self._download_slam_pointbypoint_robust(file_info['name'], file_info['url'])
-                    if not df.empty:
-                        # Extraer torneo y año del nombre
-                        parts = file_info['name'].split('_')
-                        if len(parts) >= 2:
-                            tournament = parts[0]
-                            if tournament not in results['slam_pointbypoint']:
-                                results['slam_pointbypoint'][tournament] = []
-                            results['slam_pointbypoint'][tournament].append(df)
-                
-                # Consolidar datos por torneo
-                for tournament, frames in results['slam_pointbypoint'].items():
-                    if frames:
-                        combined = pd.concat(frames, ignore_index=True)
-                        # Guardar datos punto por punto
-                        output_file = self.output_dir / 'slam_pointbypoint' / f"{tournament}_{self.start_year}_{self.end_year}.csv"
-                        output_file.parent.mkdir(exist_ok=True)
-                        combined.to_csv(output_file, index=False)
-                        logger.info(f"Datos punto por punto de {tournament.replace('_', ' ').title()} guardados en {output_file}: {len(combined)} puntos")
-            else:
-                # Si no encontramos archivos con la primera búsqueda, intentar una búsqueda más exhaustiva
-                logger.info("Realizando búsqueda exhaustiva de archivos punto por punto de Grand Slam...")
-                
-                base_url = f"{self.repo_base_url}{self.slam_pointbypoint_structure['repo']}"
-                
-                # Probar directamente en directorios de años
-                years = range(max(self.start_year, 2000), self.end_year + 1)
-                tournaments = ['ao', 'ausopen', 'fo', 'frenchopen', 'rg', 'wimbledon', 'wim', 'uso', 'usopen']
-                
+                # Buscar subdirectorios por año
                 for year in years:
-                    year_url = f"{base_url}/{year}"
+                    year_dir = f"{tournament_dir}{year}/"
+                    year_url = f"{base_url}/{year_dir}"
                     
-                    # Buscar archivos punto por punto en el directorio del año
-                    for tournament in tournaments:
-                        tournament_dir_url = f"{year_url}/{tournament}"
+                    for file_name in ["points.csv", "matches.csv", "all.csv", "stats.csv"]:
+                        file_url = f"{year_url}{file_name}"
                         
-                        # Buscar cualquier archivo CSV en esta ubicación
-                        for pattern in ["points.csv", "pbp.csv", "pointbypoint.csv", "data.csv"]:
-                            file_url = f"{tournament_dir_url}/{pattern}"
+                        if self._check_file_exists(file_url):
+                            logger.info(f"Encontrado archivo: {year_dir}{file_name}")
                             
-                            if self._check_file_exists(file_url):
-                                logger.info(f"Encontrado archivo punto por punto en ubicación alternativa: {year}/{tournament}/{pattern}")
+                            # Descargar el archivo
+                            output_name = f"{canonical_name}_{year}_{file_name.replace('.csv', '')}_v3"
+                            cache_file = self.cache_dir / 'slam_pointbypoint' / f"{output_name}.csv"
+                            output_file = self.output_dir / 'slam_pointbypoint' / f"{output_name}.csv"
+                            
+                            try:
+                                response = self._make_request(file_url)
+                                content = response.content.decode('utf-8')
+                                df = pd.read_csv(StringIO(content))
                                 
-                                # Determinar torneo normalizado
-                                if tournament in ['ao', 'ausopen']:
-                                    normalized_tournament = 'australian_open'
-                                elif tournament in ['fo', 'frenchopen', 'rg']:
-                                    normalized_tournament = 'french_open'
-                                elif tournament in ['wim', 'wimbledon']:
-                                    normalized_tournament = 'wimbledon'
-                                elif tournament in ['uso', 'usopen']:
-                                    normalized_tournament = 'us_open'
-                                else:
-                                    normalized_tournament = tournament
+                                # Añadir metadatos si no existen
+                                if 'tournament' not in df.columns:
+                                    df['tournament'] = canonical_name
+                                if 'year' not in df.columns:
+                                    df['year'] = year
+                                if 'slam' not in df.columns:
+                                    df['slam'] = canonical_name
                                 
-                                # Construir nombre del archivo
-                                file_name = f"{normalized_tournament}_{year}"
+                                # Guardar archivos
+                                cache_file.parent.mkdir(exist_ok=True)
+                                output_file.parent.mkdir(exist_ok=True)
                                 
-                                df = self._download_slam_pointbypoint_robust(file_name, file_url)
-                                if not df.empty:
-                                    if normalized_tournament not in results['slam_pointbypoint']:
-                                        results['slam_pointbypoint'][normalized_tournament] = []
-                                    results['slam_pointbypoint'][normalized_tournament].append(df)
-                
-                # Consolidar datos por torneo tras la búsqueda exhaustiva
-                for tournament, frames in results['slam_pointbypoint'].items():
-                    if frames:
-                        combined = pd.concat(frames, ignore_index=True)
-                        # Guardar datos punto por punto
-                        output_file = self.output_dir / 'slam_pointbypoint' / f"{tournament}_{self.start_year}_{self.end_year}.csv"
-                        output_file.parent.mkdir(exist_ok=True)
-                        combined.to_csv(output_file, index=False)
-                        logger.info(f"Datos punto por punto de {tournament.replace('_', ' ').title()} guardados en {output_file}: {len(combined)} puntos")
-                
-                if not results['slam_pointbypoint']:
-                    logger.warning("No se encontraron archivos de datos punto por punto de Grand Slam")
+                                df.to_csv(cache_file, index=False)
+                                df.to_csv(output_file, index=False)
+                                
+                                results[output_name] = df
+                                logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                            except Exception as e:
+                                logger.warning(f"Error procesando {file_url}: {str(e)}")
         
-        # 8. Crear archivos combinados
-        self._create_combined_files(results)
+        # 4. BUSCAR ARCHIVOS EN ESTRUCTURA DE DIRECTORIO POR AÑO PRIMERO
+        logger.info("Buscando archivos en estructura de directorios por año/torneo...")
+        
+        for year in years:
+            year_dir = f"{year}/"
+            year_url = f"{base_url}/{year_dir}"
+            
+            # Verificar si existe el directorio de año
+            dir_exists = False
+            for test_file in ["README.md", "index.html", "points.csv"]:
+                if self._check_file_exists(f"{year_url}{test_file}"):
+                    dir_exists = True
+                    logger.info(f"Encontrado directorio para año: {year}")
+                    break
+            
+            if dir_exists:
+                # Buscar subdirectorios de torneos en este año
+                for tournament_code in tournament_mappings.keys():
+                    canonical_name = tournament_mappings[tournament_code]
+                    tournament_dir = f"{year_dir}{tournament_code}/"
+                    tournament_url = f"{base_url}/{tournament_dir}"
+                    
+                    for file_name in ["points.csv", "matches.csv", "all.csv", "stats.csv"]:
+                        file_url = f"{tournament_url}{file_name}"
+                        
+                        if self._check_file_exists(file_url):
+                            logger.info(f"Encontrado archivo: {tournament_dir}{file_name}")
+                            
+                            # Descargar el archivo
+                            output_name = f"{canonical_name}_{year}_{file_name.replace('.csv', '')}_v4"
+                            cache_file = self.cache_dir / 'slam_pointbypoint' / f"{output_name}.csv"
+                            output_file = self.output_dir / 'slam_pointbypoint' / f"{output_name}.csv"
+                            
+                            try:
+                                response = self._make_request(file_url)
+                                content = response.content.decode('utf-8')
+                                df = pd.read_csv(StringIO(content))
+                                
+                                # Añadir metadatos si no existen
+                                if 'tournament' not in df.columns:
+                                    df['tournament'] = canonical_name
+                                if 'year' not in df.columns:
+                                    df['year'] = year
+                                if 'slam' not in df.columns:
+                                    df['slam'] = canonical_name
+                                
+                                # Guardar archivos
+                                cache_file.parent.mkdir(exist_ok=True)
+                                output_file.parent.mkdir(exist_ok=True)
+                                
+                                df.to_csv(cache_file, index=False)
+                                df.to_csv(output_file, index=False)
+                                
+                                results[output_name] = df
+                                logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                            except Exception as e:
+                                logger.warning(f"Error procesando {file_url}: {str(e)}")
+                
+                # Buscar archivos directamente en el directorio año (posibles consolidados)
+                for file_pattern in ["all_points.csv", "all_matches.csv", "points_summary.csv", "stats.csv"]:
+                    file_url = f"{year_url}{file_pattern}"
+                    
+                    if self._check_file_exists(file_url):
+                        logger.info(f"Encontrado archivo consolidado: {year_dir}{file_pattern}")
+                        
+                        # Descargar el archivo
+                        output_name = f"all_slams_{year}_{file_pattern.replace('.csv', '')}"
+                        cache_file = self.cache_dir / 'slam_pointbypoint' / f"{output_name}.csv"
+                        output_file = self.output_dir / 'slam_pointbypoint' / f"{output_name}.csv"
+                        
+                        try:
+                            response = self._make_request(file_url)
+                            content = response.content.decode('utf-8')
+                            df = pd.read_csv(StringIO(content))
+                            
+                            # Añadir metadatos si no existen
+                            if 'year' not in df.columns:
+                                df['year'] = year
+                            
+                            # Guardar archivos
+                            cache_file.parent.mkdir(exist_ok=True)
+                            output_file.parent.mkdir(exist_ok=True)
+                            
+                            df.to_csv(cache_file, index=False)
+                            df.to_csv(output_file, index=False)
+                            
+                            results[output_name] = df
+                            logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                        except Exception as e:
+                            logger.warning(f"Error procesando {file_url}: {str(e)}")
+        
+        # 5. BUSCAR ARCHIVOS CONSOLIDADOS EN DIRECTORIOS ESPECIALES
+        logger.info("Buscando archivos consolidados en directorios especiales...")
+        
+        special_dirs = ["data/", "combined/", "all/", "full/", "complete/"]
+        
+        for special_dir in special_dirs:
+            special_url = f"{base_url}/{special_dir}"
+            
+            # 5.1 Buscar archivos por torneo
+            for tournament_code in tournament_mappings.keys():
+                canonical_name = tournament_mappings[tournament_code]
+                
+                # Patrones para archivos consolidados por torneo
+                consolidated_patterns = [
+                    f"{tournament_code}_all.csv",
+                    f"{tournament_code}_all_points.csv",
+                    f"{tournament_code}_points.csv",
+                    f"all_{tournament_code}.csv",
+                    f"all_{tournament_code}_points.csv"
+                ]
+                
+                for pattern in consolidated_patterns:
+                    file_url = f"{special_url}{pattern}"
+                    
+                    if self._check_file_exists(file_url):
+                        logger.info(f"Encontrado archivo consolidado: {special_dir}{pattern}")
+                        
+                        # Descargar el archivo
+                        output_name = f"{canonical_name}_all_consolidated"
+                        cache_file = self.cache_dir / 'slam_pointbypoint' / f"{output_name}.csv"
+                        output_file = self.output_dir / 'slam_pointbypoint' / f"{output_name}.csv"
+                        
+                        try:
+                            response = self._make_request(file_url)
+                            content = response.content.decode('utf-8')
+                            df = pd.read_csv(StringIO(content))
+                            
+                            # Añadir metadatos si no existen
+                            if 'tournament' not in df.columns:
+                                df['tournament'] = canonical_name
+                            if 'slam' not in df.columns:
+                                df['slam'] = canonical_name
+                            
+                            # Guardar archivos
+                            cache_file.parent.mkdir(exist_ok=True)
+                            output_file.parent.mkdir(exist_ok=True)
+                            
+                            df.to_csv(cache_file, index=False)
+                            df.to_csv(output_file, index=False)
+                            
+                            results[output_name] = df
+                            logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                        except Exception as e:
+                            logger.warning(f"Error procesando {file_url}: {str(e)}")
+            
+            # 5.2 Buscar archivos consolidados generales
+            consolidated_files = [
+                "all_slam_points.csv", 
+                "all_points.csv", 
+                "all_slams.csv", 
+                "slam_pointbypoint.csv",
+                "slam_points_all.csv"
+            ]
+            
+            for file_name in consolidated_files:
+                file_url = f"{special_url}{file_name}"
+                
+                if self._check_file_exists(file_url):
+                    logger.info(f"Encontrado archivo consolidado general: {special_dir}{file_name}")
+                    
+                    # Descargar el archivo
+                    output_name = f"all_slams_consolidated_{file_name.replace('.csv', '')}"
+                    cache_file = self.cache_dir / 'slam_pointbypoint' / f"{output_name}.csv"
+                    output_file = self.output_dir / 'slam_pointbypoint' / f"{output_name}.csv"
+                    
+                    try:
+                        response = self._make_request(file_url)
+                        content = response.content.decode('utf-8')
+                        df = pd.read_csv(StringIO(content))
+                        
+                        # Guardar archivos
+                        cache_file.parent.mkdir(exist_ok=True)
+                        output_file.parent.mkdir(exist_ok=True)
+                        
+                        df.to_csv(cache_file, index=False)
+                        df.to_csv(output_file, index=False)
+                        
+                        results[output_name] = df
+                        logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                    except Exception as e:
+                        logger.warning(f"Error procesando {file_url}: {str(e)}")
+        
+        # 6. SI AÚN NO SE HAN ENCONTRADO ARCHIVOS, INTENTAR CON LA API DE GITHUB
+        if not results:
+            logger.info("No se encontraron archivos con métodos de búsqueda estándar, intentando con API de GitHub...")
+            github_results = self._download_slam_pointbypoint_via_github()
+            results.update(github_results)
+        
+        # 7. PROCESAMIENTO FINAL Y RESUMEN
+        if results:
+            # Número total de archivos y registros
+            total_files = len(results)
+            total_records = sum(len(df) for df in results.values())
+            
+            logger.info(f"=== Recopilación de datos punto por punto de Grand Slam completada ===")
+            logger.info(f"Total de archivos descargados: {total_files}")
+            logger.info(f"Total de registros: {total_records:,}")
+            
+            # Agrupar archivos por torneo y año para análisis
+            tournament_files = {}
+            year_files = {}
+            
+            for name, df in results.items():
+                # Identificar torneo
+                tournament = None
+                if 'tournament' in df.columns and len(df) > 0:
+                    tournament = df['tournament'].iloc[0]
+                else:
+                    # Intentar extraer del nombre
+                    for t_code, t_name in tournament_mappings.items():
+                        if t_code in name or t_name in name:
+                            tournament = t_name
+                            break
+                
+                # Identificar año
+                year = None
+                if 'year' in df.columns and len(df) > 0:
+                    year = df['year'].iloc[0]
+                else:
+                    # Intentar extraer del nombre
+                    for y in years:
+                        if str(y) in name:
+                            year = y
+                            break
+                
+                # Registrar en las estructuras
+                if tournament:
+                    if tournament not in tournament_files:
+                        tournament_files[tournament] = []
+                    tournament_files[tournament].append(name)
+                
+                if year:
+                    year_str = str(year)
+                    if year_str not in year_files:
+                        year_files[year_str] = []
+                    year_files[year_str].append(name)
+            
+            # Crear archivo de metadatos
+            try:
+                metadata = {
+                    "collection_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "total_files": total_files,
+                    "total_records": total_records,
+                    "tournaments": {},
+                    "years": {},
+                    "files": {}
+                }
+                
+                # Información por torneo
+                for tournament, files in tournament_files.items():
+                    metadata["tournaments"][tournament] = {
+                        "files": files,
+                        "count": len(files),
+                        "readable_name": tournament_readable.get(tournament, tournament)
+                    }
+                
+                # Información por año
+                for year, files in year_files.items():
+                    metadata["years"][year] = {
+                        "files": files,
+                        "count": len(files)
+                    }
+                
+                # Información por archivo
+                for name, df in results.items():
+                    metadata["files"][name] = {
+                        "records": len(df),
+                        "columns": list(df.columns),
+                        "memory_size_kb": int(df.memory_usage(deep=True).sum() / 1024)
+                    }
+                
+                # Guardar archivo de metadatos
+                metadata_file = self.output_dir / 'slam_pointbypoint' / 'metadata.json'
+                with open(metadata_file, 'w') as f:
+                    json.dump(metadata, f, indent=2)
+                
+                logger.info(f"Creado archivo de metadatos con información de {total_files} archivos")
+                
+                # Crear archivos combinados por torneo para facilitar el análisis
+                for tournament, files in tournament_files.items():
+                    if len(files) > 1:
+                        try:
+                            # Preparar lista de DataFrames a combinar
+                            dfs_to_combine = []
+                            for file_name in files:
+                                dfs_to_combine.append(results[file_name])
+                            
+                            combined_df = pd.concat(dfs_to_combine, ignore_index=True)
+                            
+                            # Eliminar duplicados si es posible
+                            if 'point_id' in combined_df.columns:
+                                orig_len = len(combined_df)
+                                combined_df.drop_duplicates(subset=['point_id'], inplace=True)
+                                if len(combined_df) < orig_len:
+                                    logger.info(f"Eliminados {orig_len - len(combined_df)} duplicados en {tournament}")
+                            
+                            # Guardar archivo combinado
+                            readable_name = tournament_readable.get(tournament, tournament)
+                            output_file = self.output_dir / 'slam_pointbypoint' / f"{tournament}_all_combined.csv"
+                            combined_df.to_csv(output_file, index=False)
+                            
+                            logger.info(f"Creado archivo combinado para {readable_name}: {len(combined_df)} registros")
+                        except Exception as e:
+                            logger.warning(f"Error al crear archivo combinado para {tournament}: {str(e)}")
+            except Exception as e:
+                logger.warning(f"Error al crear archivo de metadatos: {str(e)}")
+        else:
+            logger.warning("No se pudieron encontrar archivos de datos punto por punto de Grand Slam.")
         
         return results
 
-    def _download_slam_pointbypoint_robust(self, data_name: str, url: str) -> pd.DataFrame:
+    def _download_slam_pointbypoint_via_github(self) -> Dict[str, pd.DataFrame]:
         """
-        Descarga datos punto por punto de Grand Slam con manejo robusto de errores.
+        Descarga datos punto por punto de Grand Slam utilizando la API de GitHub.
+        Esta función obtiene la lista completa de archivos CSV en el repositorio
+        sin depender de adivinar rutas o nombres.
         
-        Args:
-            data_name: Nombre del conjunto de datos (en formato torneo_año)
-            url: URL del archivo a descargar
-            
         Returns:
-            DataFrame con datos punto por punto
+            Dict[str, pd.DataFrame]: Diccionario con los DataFrames descargados
         """
+        results = {}
+        
+        logger.info("Iniciando descarga de datos punto por punto de Grand Slam mediante API de GitHub...")
+        
+        # Repositorio a explorar
+        repo = "JeffSackmann/tennis_slam_pointbypoint"
+        
+        # Mapeo de torneos para enriquecimiento de datos
+        tournament_mappings = {
+            "ausopen": "australian_open",
+            "ao": "australian_open",
+            "australian": "australian_open",
+            "frenchopen": "french_open",
+            "fo": "french_open",
+            "rg": "french_open",
+            "roland": "french_open",
+            "wimbledon": "wimbledon",
+            "wim": "wimbledon",
+            "usopen": "us_open",
+            "uso": "us_open"
+        }
+        
         try:
-            # Extraer torneo y año del nombre
-            parts = data_name.split('_')
-            if len(parts) < 2:
-                logger.warning(f"Formato de nombre no válido: {data_name}")
-                return pd.DataFrame()
+            # Obtener todos los archivos CSV del repositorio (profundidad máxima de 3 niveles)
+            csv_files = self._download_github_repo_files(repo, ['.csv'], max_depth=3)
+            
+            if not csv_files:
+                logger.warning(f"No se encontraron archivos CSV en {repo} vía GitHub API")
+                return results
+            
+            logger.info(f"Encontrados {len(csv_files)} archivos CSV en {repo} vía GitHub API")
+            
+            # Descargar todos los archivos encontrados
+            for file_path, download_url in csv_files.items():
+                # Crear un nombre único para este archivo
+                # Reemplazar / por _ para evitar problemas con rutas
+                safe_name = file_path.replace('/', '_').replace('-', '_').replace('.csv', '')
                 
-            tournament = parts[0]
-            year = int(parts[1])
-            
-            # Formar ruta de caché
-            filename = os.path.basename(url)
-            cache_file = self.cache_dir / 'slam_pointbypoint' / f"{filename}"
-            
-            # Descargar datos
-            logger.info(f"Descargando datos punto por punto de {tournament.replace('_', ' ').title()} {year}...")
-            df = self._download_file(url, cache_file)
-            
-            # Añadir columnas útiles si no existen
-            if 'tournament' not in df.columns:
-                df['tournament'] = tournament
-            if 'year' not in df.columns:
-                df['year'] = year
-            
-            # Verificar si hay datos
-            if df.empty:
-                logger.warning(f"No hay datos punto por punto para {tournament.replace('_', ' ').title()} {year}")
-                return pd.DataFrame()
-            
-            # Información básica
-            logger.info(f"Datos punto por punto de {tournament.replace('_', ' ').title()} {year} descargados: {len(df)} puntos")
-            
-            return df
-            
-        except Exception as e:
-            logger.warning(f"Error descargando datos punto por punto de {data_name.replace('_', ' ').title()}: {str(e)}")
-            # Intentar una vez más con manejo de errores adicionales
-            try:
-                filename = os.path.basename(url)
-                cache_file = self.cache_dir / 'slam_pointbypoint' / f"{filename}"
+                # Si el nombre generado es demasiado largo, truncarlo de manera inteligente
+                if len(safe_name) > 100:
+                    # Extraer partes importantes (primero y últimos componentes)
+                    parts = safe_name.split('_')
+                    if len(parts) > 4:
+                        # Tomar el primer componente (generalmente el torneo) y los últimos componentes
+                        safe_name = f"{parts[0]}_{parts[1]}__{parts[-2]}_{parts[-1]}"
                 
-                # Intentar descargar el archivo bruto
-                response = self._make_request(url)
-                response.raise_for_status()
-                content = response.content.decode('utf-8')
+                # Rutas de archivo
+                cache_file = self.cache_dir / 'slam_pointbypoint' / f"{safe_name}.csv"
+                output_file = self.output_dir / 'slam_pointbypoint' / f"{safe_name}.csv"
                 
-                # Guardar el contenido bruto
-                cache_file.parent.mkdir(exist_ok=True)
-                with open(cache_file, 'w') as f:
-                    f.write(content)
-                
-                # Intentar parsear con opciones más robustas
                 try:
-                    df = pd.read_csv(cache_file, error_bad_lines=False, warn_bad_lines=True, 
-                                    delimiter=None, low_memory=False, on_bad_lines='skip')
-                except:
-                    # Si eso falla, probar con otros delimitadores
-                    for delimiter in [',', ';', '\t', '|']:
-                        try:
-                            df = pd.read_csv(cache_file, delimiter=delimiter, error_bad_lines=False, 
-                                           warn_bad_lines=True, low_memory=False, on_bad_lines='skip')
-                            if not df.empty:
+                    logger.info(f"Descargando {file_path} desde GitHub API")
+                    response = self._make_request(download_url)
+                    content = response.content.decode('utf-8')
+                    
+                    # Intentar procesar como CSV
+                    try:
+                        df = pd.read_csv(StringIO(content))
+                        
+                        # Verificar si el archivo parece contener datos de puntos
+                        # Algunas columnas comunes en archivos punto por punto
+                        point_columns = ['point_no', 'point_id', 'server', 'receiver', 'winner', 'p1_score', 'p2_score', 
+                                        'set_no', 'game_no', 'point_victor', 'serve_no']
+                        
+                        is_point_data = any(col in df.columns for col in point_columns)
+                        
+                        if is_point_data or len(df.columns) >= 5:  # Archivos punto por punto suelen tener varias columnas
+                            # Extraer información de la ruta del archivo para enriquecer los datos
+                            parts = file_path.split('/')
+                            
+                            # Tratar de identificar torneo y año de la ruta
+                            tournament = None
+                            year = None
+                            
+                            for part in parts:
+                                # Detectar año (números entre 1990-2025)
+                                if part.isdigit() and 1990 <= int(part) <= 2025:
+                                    year = int(part)
+                                
+                                # Detectar torneo
+                                for t_code in tournament_mappings.keys():
+                                    if t_code in part.lower():
+                                        tournament = tournament_mappings[t_code]
+                                        break
+                            
+                            # Si no se detectó en partes, buscar en el nombre del archivo
+                            if tournament is None:
+                                filename = os.path.basename(file_path)
+                                for t_code in tournament_mappings.keys():
+                                    if t_code in filename.lower():
+                                        tournament = tournament_mappings[t_code]
+                                        break
+                            
+                            # Añadir metadatos útiles si no existen
+                            if 'tournament' not in df.columns and tournament:
+                                df['tournament'] = tournament
+                            if 'year' not in df.columns and year:
+                                df['year'] = year
+                            if 'slam' not in df.columns and tournament:
+                                df['slam'] = tournament
+                            
+                            # Añadir ruta original como referencia
+                            df['source_path'] = file_path
+                            
+                            # Guardar archivos
+                            cache_file.parent.mkdir(exist_ok=True)
+                            output_file.parent.mkdir(exist_ok=True)
+                            
+                            df.to_csv(cache_file, index=False)
+                            df.to_csv(output_file, index=False)
+                            
+                            results[safe_name] = df
+                            logger.info(f"Descargado archivo {safe_name}.csv vía GitHub API: {len(df)} registros")
+                        else:
+                            logger.debug(f"Omitiendo {file_path} - no parece contener datos punto por punto")
+                    except pd.errors.EmptyDataError:
+                        logger.warning(f"Archivo vacío: {file_path}")
+                    except pd.errors.ParserError:
+                        logger.warning(f"Error al parsear CSV: {file_path} - posiblemente no es un CSV válido")
+                except Exception as e:
+                    logger.warning(f"Error procesando {download_url}: {str(e)}")
+        
+            # Procesar los resultados
+            if results:
+                # Contar archivos por torneo
+                tournaments_count = {}
+                for name, df in results.items():
+                    tournament = None
+                    if 'tournament' in df.columns and len(df) > 0:
+                        tournament = df['tournament'].iloc[0]
+                    elif 'slam' in df.columns and len(df) > 0:
+                        tournament = df['slam'].iloc[0]
+                    else:
+                        # Intentar extraer del nombre
+                        for t_code, t_name in tournament_mappings.items():
+                            if t_code in name or t_name in name:
+                                tournament = t_name
                                 break
-                        except:
-                            continue
+                    
+                    if tournament:
+                        if tournament not in tournaments_count:
+                            tournaments_count[tournament] = 0
+                        tournaments_count[tournament] += 1
                 
-                # Extraer torneo y año del nombre de nuevo
-                parts = data_name.split('_')
-                tournament = parts[0]
-                year = int(parts[1])
-                
-                # Añadir columnas útiles si no existen
-                if 'tournament' not in df.columns:
-                    df['tournament'] = tournament
-                if 'year' not in df.columns:
-                    df['year'] = year
-                
-                # Verificar si hay datos
-                if df.empty:
-                    logger.warning(f"No hay datos punto por punto para {tournament.replace('_', ' ').title()} {year} (segundo intento)")
-                    return pd.DataFrame()
-                
-                logger.info(f"Datos punto por punto de {tournament.replace('_', ' ').title()} {year} descargados (segundo intento): {len(df)} puntos")
-                return df
-            
-            except Exception as e2:
-                logger.warning(f"Error en segundo intento de descarga para {data_name}: {str(e2)}")
-                return pd.DataFrame()
+                # Mostrar resumen
+                logger.info(f"Descarga vía GitHub API completada: {len(results)} archivos descargados")
+                for tournament, count in tournaments_count.items():
+                    logger.info(f"  - {tournament}: {count} archivos")
+        
+        except Exception as e:
+            logger.warning(f"Error explorando {repo} vía GitHub API: {str(e)}")
+        
+        return results
 
-    def _find_slam_pointbypoint_files(self) -> List[Dict[str, str]]:
+    def _download_pointbypoint_data(self) -> Dict[str, pd.DataFrame]:
         """
-        Encuentra archivos disponibles en el repositorio de datos punto por punto de Grand Slam.
+        Descarga datos punto por punto directamente del repositorio oficial de manera exhaustiva.
+        Implementa múltiples estrategias para encontrar todos los archivos disponibles.
         
         Returns:
-            Lista de diccionarios con información de los archivos
+            Dict[str, pd.DataFrame]: Diccionario con todos los datos punto por punto recopilados
         """
-        files = []
+        results = {}
         
-        # Intentar con archivos principales esperados
-        base_url = f"{self.repo_base_url}{self.slam_pointbypoint_structure['repo']}"
+        # URL base del repositorio oficial
+        base_url = "https://raw.githubusercontent.com/JeffSackmann/tennis_pointbypoint/master"
         
-        # Comprobar si hay README para entender la estructura
+        logger.info("=== Iniciando recopilación exhaustiva de datos punto por punto ===")
+        
+        # Verificar si podemos acceder al repositorio
         readme_url = f"{base_url}/README.md"
-        if self._check_file_exists(readme_url):
-            logger.debug("Encontrado README en repositorio de datos punto por punto de Grand Slam")
+        if not self._check_file_exists(readme_url):
+            logger.warning("No se puede acceder al repositorio de datos punto por punto.")
+            return results
         
-        # 1. Buscar archivos con los patrones principales
-        logger.info("Buscando archivos de datos punto por punto de Grand Slam con patrones principales...")
-        years = range(max(self.start_year, 2000), self.end_year + 1)  # Usamos 2000 como límite inferior seguro
+        # 1. ESTRUCTURA DEL REPOSITORIO
+        # El repositorio tennis_pointbypoint tiene una estructura más compleja y variable
+        # que los otros repositorios. Los datos pueden estar organizados de diferentes maneras:
+        # - Por año y luego por torneo: /2019/ausopen/...
+        # - Por torneo y luego por año: /ausopen/2019/...
+        # - Por torneo y año combinados: /ausopen_2019/...
+        # - Por año solo con puntos de varios torneos: /2019/points.csv
         
-        for tournament_key, file_pattern in self.slam_pointbypoint_structure['tournaments'].items():
-            for year in years:
-                filename = file_pattern.format(year=year)
-                file_url = f"{base_url}/{filename}"
-                
-                if self._check_file_exists(file_url):
-                    files.append({
-                        'name': f"{tournament_key}_{year}",
-                        'url': file_url
-                    })
-                    logger.info(f"Encontrado archivo de datos punto por punto: {filename}")
+        # Torneos principales
+        tournaments = [
+            "ausopen", "ao", "australian_open", "australian-open",
+            "frenchopen", "fo", "rg", "roland_garros", "roland-garros", "french_open", "french-open",
+            "usopen", "uso", "us_open", "us-open",
+            "wimbledon", "wim", "wm",
+            "masters", "atp_finals", "wta_finals",
+            "master1000", "m1000", "atp1000",
+            "master500", "m500", "atp500",
+            "master250", "m250", "atp250",
+            "davis", "davis_cup", "fed", "fed_cup", "bjk", "bjk_cup",
+            "olympics", "olympic"
+        ]
         
-        # 2. Búsqueda avanzada: verificar diferentes directorios y nombres de torneos
-        if len(files) == 0:
-            logger.info("Buscando archivos de datos punto por punto de Grand Slam con nombres alternativos de torneos...")
+        # Años para buscar (ajustar según necesidad)
+        years = list(range(2000, 2025))
+        
+        # 2. BÚSQUEDA POR ESTRUCTURA AÑO/TORNEO
+        logger.info("Buscando en estructura de directorios por año/torneo...")
+        for year in years:
+            year_str = str(year)
+            year_dir = f"{year_str}/"
             
-            for tournament_key, tournament_dirs in self.slam_pointbypoint_structure['tournament_dirs'].items():
-                for tournament_dir in tournament_dirs:
-                    tournament_dir_url = f"{base_url}/{tournament_dir}"
+            # Verificar si existe el directorio del año
+            test_url = f"{base_url}/{year_dir}"
+            
+            # Para ser más confiables, verificamos si existe algún archivo o subdirectorio conocido
+            test_files = ["index.html", "README.md", "matches.csv", "points.csv"]
+            year_dir_exists = False
+            
+            for test_file in test_files:
+                if self._check_file_exists(f"{test_url}/{test_file}"):
+                    year_dir_exists = True
+                    logger.info(f"Encontrado directorio para año {year}")
+                    break
                     
-                    # Verificar si existe el directorio mediante algún archivo
-                    readme_url = f"{tournament_dir_url}/README.md"
-                    dir_exists = self._check_file_exists(readme_url)
+            if year_dir_exists:
+                # Buscar subdirectorios de torneos en este año
+                for tournament in tournaments:
+                    tournament_dir = f"{year_dir}{tournament}/"
+                    tournament_url = f"{base_url}/{tournament_dir}"
                     
-                    if not dir_exists:
-                        # Probar otros archivos para verificar si el directorio existe
-                        for year in [2022, 2019, 2015]:
-                            test_file = f"{tournament_dir_url}/points_{year}.csv"
-                            if self._check_file_exists(test_file):
-                                dir_exists = True
-                                break
-                    
-                    if dir_exists:
-                        logger.info(f"Encontrado directorio para {tournament_key}: {tournament_dir}")
+                    # Verificar si existe algún archivo en este directorio
+                    for test_file in ["1.csv", "points.csv", "matches.csv"]:
+                        file_url = f"{tournament_url}/{test_file}"
                         
-                        # Buscar archivos con diferentes patrones
-                        for file_pattern in self.slam_pointbypoint_structure['file_patterns']:
-                            for year in years:
-                                try:
-                                    filename = file_pattern.format(tournament=tournament_dir, year=year)
-                                    file_url = f"{tournament_dir_url}/{filename}"
-                                except KeyError:
-                                    # Si el patrón no tiene {tournament}
-                                    filename = file_pattern.format(year=year)
-                                    file_url = f"{tournament_dir_url}/{filename}"
+                        if self._check_file_exists(file_url):
+                            logger.info(f"Encontrado directorio {tournament} para año {year}")
+                            
+                            # Ahora buscar todos los archivos CSV en este directorio
+                            # Típicamente son archivos numerados (1.csv, 2.csv, etc.) para partidos individuales
+                            for match_num in range(1, 501):  # Un límite razonable
+                                match_file = f"{match_num}.csv"
+                                match_url = f"{tournament_url}/{match_file}"
                                 
-                                if self._check_file_exists(file_url):
-                                    files.append({
-                                        'name': f"{tournament_key}_{year}",
-                                        'url': file_url
-                                    })
-                                    logger.info(f"Encontrado archivo alternativo de datos punto por punto: {tournament_dir}/{filename}")
-        
-        # 3. Búsqueda de último recurso: buscar en años específicos
-        if len(files) == 0:
-            logger.info("Buscando archivos de datos punto por punto de Grand Slam por año...")
-            
-            # Buscar directamente por años
-            for year in years:
-                year_dir_url = f"{base_url}/{year}"
+                                if self._check_file_exists(match_url):
+                                    logger.info(f"Encontrado archivo de partido: {tournament_dir}{match_file}")
+                                    
+                                    # Descargar y procesar el archivo
+                                    output_name = f"{year}_{tournament}_match_{match_num}"
+                                    cache_file = self.cache_dir / 'pointbypoint' / f"{output_name}.csv"
+                                    output_file = self.output_dir / 'pointbypoint' / f"{output_name}.csv"
+                                    
+                                    try:
+                                        response = self._make_request(match_url)
+                                        content = response.content.decode('utf-8')
+                                        df = pd.read_csv(StringIO(content))
+                                        
+                                        # Añadir metadatos útiles si no existen
+                                        if 'tournament' not in df.columns:
+                                            df['tournament'] = tournament
+                                        if 'year' not in df.columns:
+                                            df['year'] = year
+                                        if 'match_num' not in df.columns:
+                                            df['match_num'] = match_num
+                                        
+                                        # Guardar archivo
+                                        cache_file.parent.mkdir(exist_ok=True)
+                                        output_file.parent.mkdir(exist_ok=True)
+                                        
+                                        df.to_csv(cache_file, index=False)
+                                        df.to_csv(output_file, index=False)
+                                        
+                                        results[output_name] = df
+                                        logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                                    except Exception as e:
+                                        logger.warning(f"Error procesando {match_url}: {str(e)}")
+                                else:
+                                    # Si no encontramos este número de partido, probablemente llegamos al final
+                                    if match_num > 1:
+                                        break
+                            
+                            # Buscar también archivos consolidados de puntos o partidos
+                            for consolidated_file in ["points.csv", "matches.csv", "stats.csv", "all_points.csv", "all_matches.csv"]:
+                                consolidated_url = f"{tournament_url}/{consolidated_file}"
+                                
+                                if self._check_file_exists(consolidated_url):
+                                    logger.info(f"Encontrado archivo consolidado: {tournament_dir}{consolidated_file}")
+                                    
+                                    output_name = f"{year}_{tournament}_{consolidated_file.replace('.csv', '')}"
+                                    cache_file = self.cache_dir / 'pointbypoint' / f"{output_name}.csv"
+                                    output_file = self.output_dir / 'pointbypoint' / f"{output_name}.csv"
+                                    
+                                    try:
+                                        response = self._make_request(consolidated_url)
+                                        content = response.content.decode('utf-8')
+                                        df = pd.read_csv(StringIO(content))
+                                        
+                                        # Añadir metadatos útiles si no existen
+                                        if 'tournament' not in df.columns:
+                                            df['tournament'] = tournament
+                                        if 'year' not in df.columns:
+                                            df['year'] = year
+                                        
+                                        # Guardar archivo
+                                        cache_file.parent.mkdir(exist_ok=True)
+                                        output_file.parent.mkdir(exist_ok=True)
+                                        
+                                        df.to_csv(cache_file, index=False)
+                                        df.to_csv(output_file, index=False)
+                                        
+                                        results[output_name] = df
+                                        logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                                    except Exception as e:
+                                        logger.warning(f"Error procesando {consolidated_url}: {str(e)}")
+                            
+                            # Solo necesitamos verificar un archivo para confirmar que existe el directorio
+                            break
                 
-                # Verificar si el directorio del año existe
-                year_exists = False
-                for tournament_key in self.slam_pointbypoint_structure['tournaments'].keys():
-                    readme_url = f"{year_dir_url}/{tournament_key}/README.md"
-                    if self._check_file_exists(readme_url):
-                        year_exists = True
+                # Buscar también archivos directamente en el directorio del año (sin subdirectorio de torneo)
+                for file_pattern in ["points.csv", "matches.csv", "stats.csv", "all_points.csv", "all_matches.csv"]:
+                    file_url = f"{base_url}/{year_dir}{file_pattern}"
+                    
+                    if self._check_file_exists(file_url):
+                        logger.info(f"Encontrado archivo en directorio de año: {year_dir}{file_pattern}")
+                        
+                        output_name = f"{year}_{file_pattern.replace('.csv', '')}"
+                        cache_file = self.cache_dir / 'pointbypoint' / f"{output_name}.csv"
+                        output_file = self.output_dir / 'pointbypoint' / f"{output_name}.csv"
+                        
+                        try:
+                            response = self._make_request(file_url)
+                            content = response.content.decode('utf-8')
+                            df = pd.read_csv(StringIO(content))
+                            
+                            # Añadir metadatos útiles si no existen
+                            if 'year' not in df.columns:
+                                df['year'] = year
+                            
+                            # Guardar archivo
+                            cache_file.parent.mkdir(exist_ok=True)
+                            output_file.parent.mkdir(exist_ok=True)
+                            
+                            df.to_csv(cache_file, index=False)
+                            df.to_csv(output_file, index=False)
+                            
+                            results[output_name] = df
+                            logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                        except Exception as e:
+                            logger.warning(f"Error procesando {file_url}: {str(e)}")
+        
+        # 3. BÚSQUEDA POR ESTRUCTURA TORNEO/AÑO
+        logger.info("Buscando en estructura de directorios por torneo/año...")
+        for tournament in tournaments:
+            tournament_dir = f"{tournament}/"
+            tournament_url = f"{base_url}/{tournament_dir}"
+            
+            # Verificar si existe el directorio del torneo
+            test_files = ["index.html", "README.md", "matches.csv", "points.csv"]
+            tournament_dir_exists = False
+            
+            for test_file in test_files:
+                if self._check_file_exists(f"{tournament_url}/{test_file}"):
+                    tournament_dir_exists = True
+                    logger.info(f"Encontrado directorio para torneo {tournament}")
+                    break
+                    
+            if tournament_dir_exists:
+                # Buscar subdirectorios de años en este torneo
+                for year in years:
+                    year_str = str(year)
+                    year_dir = f"{tournament_dir}{year_str}/"
+                    year_url = f"{base_url}/{year_dir}"
+                    
+                    # Verificar si existe algún archivo en este directorio
+                    for test_file in ["1.csv", "points.csv", "matches.csv"]:
+                        file_url = f"{year_url}/{test_file}"
+                        
+                        if self._check_file_exists(file_url):
+                            logger.info(f"Encontrado directorio {year} para torneo {tournament}")
+                            
+                            # Ahora buscar todos los archivos CSV en este directorio
+                            for match_num in range(1, 501):  # Un límite razonable
+                                match_file = f"{match_num}.csv"
+                                match_url = f"{year_url}/{match_file}"
+                                
+                                if self._check_file_exists(match_url):
+                                    logger.info(f"Encontrado archivo de partido: {year_dir}{match_file}")
+                                    
+                                    # Descargar y procesar el archivo
+                                    output_name = f"{tournament}_{year}_match_{match_num}"
+                                    cache_file = self.cache_dir / 'pointbypoint' / f"{output_name}.csv"
+                                    output_file = self.output_dir / 'pointbypoint' / f"{output_name}.csv"
+                                    
+                                    try:
+                                        response = self._make_request(match_url)
+                                        content = response.content.decode('utf-8')
+                                        df = pd.read_csv(StringIO(content))
+                                        
+                                        # Añadir metadatos útiles si no existen
+                                        if 'tournament' not in df.columns:
+                                            df['tournament'] = tournament
+                                        if 'year' not in df.columns:
+                                            df['year'] = year
+                                        if 'match_num' not in df.columns:
+                                            df['match_num'] = match_num
+                                        
+                                        # Guardar archivo
+                                        cache_file.parent.mkdir(exist_ok=True)
+                                        output_file.parent.mkdir(exist_ok=True)
+                                        
+                                        df.to_csv(cache_file, index=False)
+                                        df.to_csv(output_file, index=False)
+                                        
+                                        results[output_name] = df
+                                        logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                                    except Exception as e:
+                                        logger.warning(f"Error procesando {match_url}: {str(e)}")
+                                else:
+                                    # Si no encontramos este número de partido, probablemente llegamos al final
+                                    if match_num > 1:
+                                        break
+                            
+                            # Buscar también archivos consolidados de puntos o partidos
+                            for consolidated_file in ["points.csv", "matches.csv", "stats.csv", "all_points.csv", "all_matches.csv"]:
+                                consolidated_url = f"{year_url}/{consolidated_file}"
+                                
+                                if self._check_file_exists(consolidated_url):
+                                    logger.info(f"Encontrado archivo consolidado: {year_dir}{consolidated_file}")
+                                    
+                                    output_name = f"{tournament}_{year}_{consolidated_file.replace('.csv', '')}"
+                                    cache_file = self.cache_dir / 'pointbypoint' / f"{output_name}.csv"
+                                    output_file = self.output_dir / 'pointbypoint' / f"{output_name}.csv"
+                                    
+                                    try:
+                                        response = self._make_request(consolidated_url)
+                                        content = response.content.decode('utf-8')
+                                        df = pd.read_csv(StringIO(content))
+                                        
+                                        # Añadir metadatos útiles si no existen
+                                        if 'tournament' not in df.columns:
+                                            df['tournament'] = tournament
+                                        if 'year' not in df.columns:
+                                            df['year'] = year
+                                        
+                                        # Guardar archivo
+                                        cache_file.parent.mkdir(exist_ok=True)
+                                        output_file.parent.mkdir(exist_ok=True)
+                                        
+                                        df.to_csv(cache_file, index=False)
+                                        df.to_csv(output_file, index=False)
+                                        
+                                        results[output_name] = df
+                                        logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                                    except Exception as e:
+                                        logger.warning(f"Error procesando {consolidated_url}: {str(e)}")
+                            
+                            # Solo necesitamos verificar un archivo para confirmar que existe el directorio
+                            break
+                
+                # Buscar también archivos directamente en el directorio del torneo (sin subdirectorio de año)
+                for file_pattern in ["points.csv", "matches.csv", "stats.csv", "all_points.csv", "all_matches.csv"]:
+                    file_url = f"{base_url}/{tournament_dir}{file_pattern}"
+                    
+                    if self._check_file_exists(file_url):
+                        logger.info(f"Encontrado archivo en directorio de torneo: {tournament_dir}{file_pattern}")
+                        
+                        output_name = f"{tournament}_{file_pattern.replace('.csv', '')}"
+                        cache_file = self.cache_dir / 'pointbypoint' / f"{output_name}.csv"
+                        output_file = self.output_dir / 'pointbypoint' / f"{output_name}.csv"
+                        
+                        try:
+                            response = self._make_request(file_url)
+                            content = response.content.decode('utf-8')
+                            df = pd.read_csv(StringIO(content))
+                            
+                            # Añadir metadatos útiles si no existen
+                            if 'tournament' not in df.columns:
+                                df['tournament'] = tournament
+                            
+                            # Guardar archivo
+                            cache_file.parent.mkdir(exist_ok=True)
+                            output_file.parent.mkdir(exist_ok=True)
+                            
+                            df.to_csv(cache_file, index=False)
+                            df.to_csv(output_file, index=False)
+                            
+                            results[output_name] = df
+                            logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                        except Exception as e:
+                            logger.warning(f"Error procesando {file_url}: {str(e)}")
+        
+        # 4. BÚSQUEDA POR ESTRUCTURA TORNEO_AÑO
+        logger.info("Buscando en estructura de directorios torneo_año...")
+        for tournament in tournaments:
+            for year in years:
+                year_str = str(year)
+                combined_dir = f"{tournament}_{year_str}/"
+                combined_url = f"{base_url}/{combined_dir}"
+                
+                # Verificar si existe el directorio combinado
+                for test_file in ["1.csv", "points.csv", "matches.csv"]:
+                    file_url = f"{combined_url}/{test_file}"
+                    
+                    if self._check_file_exists(file_url):
+                        logger.info(f"Encontrado directorio combinado {combined_dir}")
+                        
+                        # Ahora buscar todos los archivos CSV en este directorio
+                        for match_num in range(1, 501):  # Un límite razonable
+                            match_file = f"{match_num}.csv"
+                            match_url = f"{combined_url}/{match_file}"
+                            
+                            if self._check_file_exists(match_url):
+                                logger.info(f"Encontrado archivo de partido: {combined_dir}{match_file}")
+                                
+                                # Descargar y procesar el archivo
+                                output_name = f"{tournament}_{year}_match_{match_num}"
+                                cache_file = self.cache_dir / 'pointbypoint' / f"{output_name}.csv"
+                                output_file = self.output_dir / 'pointbypoint' / f"{output_name}.csv"
+                                
+                                try:
+                                    response = self._make_request(match_url)
+                                    content = response.content.decode('utf-8')
+                                    df = pd.read_csv(StringIO(content))
+                                    
+                                    # Añadir metadatos útiles si no existen
+                                    if 'tournament' not in df.columns:
+                                        df['tournament'] = tournament
+                                    if 'year' not in df.columns:
+                                        df['year'] = year
+                                    if 'match_num' not in df.columns:
+                                        df['match_num'] = match_num
+                                    
+                                    # Guardar archivo
+                                    cache_file.parent.mkdir(exist_ok=True)
+                                    output_file.parent.mkdir(exist_ok=True)
+                                    
+                                    df.to_csv(cache_file, index=False)
+                                    df.to_csv(output_file, index=False)
+                                    
+                                    results[output_name] = df
+                                    logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                                except Exception as e:
+                                    logger.warning(f"Error procesando {match_url}: {str(e)}")
+                            else:
+                                # Si no encontramos este número de partido, probablemente llegamos al final
+                                if match_num > 1:
+                                    break
+                        
+                        # Buscar también archivos consolidados de puntos o partidos
+                        for consolidated_file in ["points.csv", "matches.csv", "stats.csv", "all_points.csv", "all_matches.csv"]:
+                            consolidated_url = f"{combined_url}/{consolidated_file}"
+                            
+                            if self._check_file_exists(consolidated_url):
+                                logger.info(f"Encontrado archivo consolidado: {combined_dir}{consolidated_file}")
+                                
+                                output_name = f"{tournament}_{year}_{consolidated_file.replace('.csv', '')}"
+                                cache_file = self.cache_dir / 'pointbypoint' / f"{output_name}.csv"
+                                output_file = self.output_dir / 'pointbypoint' / f"{output_name}.csv"
+                                
+                                try:
+                                    response = self._make_request(consolidated_url)
+                                    content = response.content.decode('utf-8')
+                                    df = pd.read_csv(StringIO(content))
+                                    
+                                    # Añadir metadatos útiles si no existen
+                                    if 'tournament' not in df.columns:
+                                        df['tournament'] = tournament
+                                    if 'year' not in df.columns:
+                                        df['year'] = year
+                                    
+                                    # Guardar archivo
+                                    cache_file.parent.mkdir(exist_ok=True)
+                                    output_file.parent.mkdir(exist_ok=True)
+                                    
+                                    df.to_csv(cache_file, index=False)
+                                    df.to_csv(output_file, index=False)
+                                    
+                                    results[output_name] = df
+                                    logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                                except Exception as e:
+                                    logger.warning(f"Error procesando {consolidated_url}: {str(e)}")
+                        
+                        # Solo necesitamos verificar un archivo para confirmar que existe el directorio
                         break
                 
-                if year_exists or self._check_file_exists(f"{year_dir_url}/README.md"):
-                    logger.info(f"Encontrado directorio para año {year}")
+                # También probar la estructura AÑO_TORNEO
+                combined_dir_alt = f"{year_str}_{tournament}/"
+                combined_url_alt = f"{base_url}/{combined_dir_alt}"
+                
+                for test_file in ["1.csv", "points.csv", "matches.csv"]:
+                    file_url = f"{combined_url_alt}/{test_file}"
                     
-                    # Buscar archivos en subdirectorios de torneos
-                    for tournament_key, tournament_dirs in self.slam_pointbypoint_structure['tournament_dirs'].items():
-                        for tournament_dir in tournament_dirs:
-                            tournament_year_url = f"{year_dir_url}/{tournament_dir}"
-                            
-                            # Buscar archivos con diferentes patrones
-                            for file_pattern in self.slam_pointbypoint_structure['file_patterns']:
-                                try:
-                                    filename = file_pattern.format(tournament=tournament_dir, year=year)
-                                    file_url = f"{tournament_year_url}/{filename}"
-                                except KeyError:
-                                    # Si el patrón no tiene {tournament}
-                                    try:
-                                        filename = file_pattern.format(year=year)
-                                        file_url = f"{tournament_year_url}/{filename}"
-                                    except KeyError:
-                                        # Si el patrón no tiene ni {tournament} ni {year}
-                                        continue
-                                
-                                if self._check_file_exists(file_url):
-                                    files.append({
-                                        'name': f"{tournament_key}_{year}",
-                                        'url': file_url
-                                    })
-                                    logger.info(f"Encontrado archivo por año de datos punto por punto: {year}/{tournament_dir}/{filename}")
-                            
-                            # Buscar cualquier archivo CSV en esta ruta
-                            points_url = f"{tournament_year_url}/points.csv"
-                            if self._check_file_exists(points_url):
-                                files.append({
-                                    'name': f"{tournament_key}_{year}",
-                                    'url': points_url
-                                })
-                                logger.info(f"Encontrado archivo genérico de datos punto por punto: {year}/{tournament_dir}/points.csv")
+                    if self._check_file_exists(file_url):
+                        logger.info(f"Encontrado directorio combinado alternativo {combined_dir_alt}")
+                        
+                        # Implementar la misma lógica que arriba para este patrón alternativo
+                        # (código similar al bloque anterior, adaptado para combined_url_alt)
+                        # ...
+                        
+                        # Solo necesitamos verificar un archivo para confirmar que existe el directorio
+                        break
         
-        if not files:
-            logger.warning("No se encontraron archivos de datos punto por punto de Grand Slam")
+        # 5. BUSCAR DIRECTORIOS/ARCHIVOS ESPECIALES
+        logger.info("Buscando directorios y archivos especiales...")
+        
+        # Directorio de recuento de rallies
+        rallycount_dir = "rallycount/"
+        rallycount_url = f"{base_url}/{rallycount_dir}"
+        
+        for file_pattern in ["all_points_with_rally_length.csv", "rally_stats.csv", "rally_data.csv"]:
+            file_url = f"{rallycount_url}/{file_pattern}"
+            
+            if self._check_file_exists(file_url):
+                logger.info(f"Encontrado archivo especial de rallycount: {rallycount_dir}{file_pattern}")
+                
+                output_name = f"rallycount_{file_pattern.replace('.csv', '')}"
+                cache_file = self.cache_dir / 'pointbypoint' / f"{output_name}.csv"
+                output_file = self.output_dir / 'pointbypoint' / f"{output_name}.csv"
+                
+                try:
+                    response = self._make_request(file_url)
+                    content = response.content.decode('utf-8')
+                    df = pd.read_csv(StringIO(content))
+                    
+                    # Guardar archivo
+                    cache_file.parent.mkdir(exist_ok=True)
+                    output_file.parent.mkdir(exist_ok=True)
+                    
+                    df.to_csv(cache_file, index=False)
+                    df.to_csv(output_file, index=False)
+                    
+                    results[output_name] = df
+                    logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                except Exception as e:
+                    logger.warning(f"Error procesando {file_url}: {str(e)}")
+        
+        # Otros directorios especiales posibles
+        special_dirs = ["data/", "csv/", "analysis/", "stats/", "combined/", "processed/"]
+        
+        for special_dir in special_dirs:
+            special_url = f"{base_url}/{special_dir}"
+            
+            for file_pattern in ["all_points.csv", "all_matches.csv", "points_summary.csv", "match_summary.csv"]:
+                file_url = f"{special_url}/{file_pattern}"
+                
+                if self._check_file_exists(file_url):
+                    logger.info(f"Encontrado archivo en directorio especial: {special_dir}{file_pattern}")
+                    
+                    output_name = f"{special_dir.replace('/', '')}_{file_pattern.replace('.csv', '')}"
+                    cache_file = self.cache_dir / 'pointbypoint' / f"{output_name}.csv"
+                    output_file = self.output_dir / 'pointbypoint' / f"{output_name}.csv"
+                    
+                    try:
+                        response = self._make_request(file_url)
+                        content = response.content.decode('utf-8')
+                        df = pd.read_csv(StringIO(content))
+                        
+                        # Guardar archivo
+                        cache_file.parent.mkdir(exist_ok=True)
+                        output_file.parent.mkdir(exist_ok=True)
+                        
+                        df.to_csv(cache_file, index=False)
+                        df.to_csv(output_file, index=False)
+                        
+                        results[output_name] = df
+                        logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                    except Exception as e:
+                        logger.warning(f"Error procesando {file_url}: {str(e)}")
+        
+        # 6. BUSCAR ARCHIVOS ESPECÍFICOS EN LA RAÍZ
+        logger.info("Buscando archivos específicos en la raíz del repositorio...")
+        root_files = [
+            "all_points.csv", "all_matches.csv", "combined_data.csv", 
+            "points_master.csv", "matches_master.csv", "points_database.csv",
+            "pointbypoint_data.csv", "pointbypoint_matches.csv"
+        ]
+        
+        for file_name in root_files:
+            file_url = f"{base_url}/{file_name}"
+            
+            if self._check_file_exists(file_url):
+                logger.info(f"Encontrado archivo en la raíz: {file_name}")
+                
+                output_name = f"root_{file_name.replace('.csv', '')}"
+                cache_file = self.cache_dir / 'pointbypoint' / f"{output_name}.csv"
+                output_file = self.output_dir / 'pointbypoint' / f"{output_name}.csv"
+                
+                try:
+                    response = self._make_request(file_url)
+                    content = response.content.decode('utf-8')
+                    df = pd.read_csv(StringIO(content))
+                    
+                    # Guardar archivo
+                    cache_file.parent.mkdir(exist_ok=True)
+                    output_file.parent.mkdir(exist_ok=True)
+                    
+                    df.to_csv(cache_file, index=False)
+                    df.to_csv(output_file, index=False)
+                    
+                    results[output_name] = df
+                    logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                except Exception as e:
+                    logger.warning(f"Error procesando {file_url}: {str(e)}")
+        
+        # 7. SI AÚN NO SE HAN ENCONTRADO ARCHIVOS, INTENTAR CON LA API DE GITHUB
+        if not results:
+            logger.info("No se encontraron archivos con métodos de búsqueda estándar, intentando con API de GitHub...")
+            github_results = self._download_pointbypoint_via_github()
+            results.update(github_results)
+        
+        # 8. RESUMEN Y PROCESAMIENTO FINAL
+        if results:
+            # Número total de archivos y registros
+            total_files = len(results)
+            total_records = sum(len(df) for df in results.values())
+            
+            logger.info(f"=== Recopilación de datos punto por punto completada ===")
+            logger.info(f"Total de archivos descargados: {total_files}")
+            logger.info(f"Total de registros: {total_records:,}")
+            
+            # Crear archivo de metadatos
+            try:
+                metadata = {
+                    "collection_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "total_files": total_files,
+                    "total_records": total_records,
+                    "files": {}
+                }
+                
+                for name, df in results.items():
+                    # Extraer información del nombre para categorizar
+                    parts = name.split('_')
+                    category = "other"
+                    
+                    if "match" in name:
+                        category = "match"
+                    elif "point" in name:
+                        category = "point"
+                    elif "rally" in name:
+                        category = "rally"
+                    elif "stat" in name:
+                        category = "stat"
+                    
+                    # Extraer torneo y año si están disponibles en las columnas
+                    tournament = df['tournament'].iloc[0] if 'tournament' in df.columns and len(df) > 0 else "unknown"
+                    year = df['year'].iloc[0] if 'year' in df.columns and len(df) > 0 else "unknown"
+                    
+                    metadata["files"][name] = {
+                        "category": category,
+                        "records": len(df),
+                        "columns": list(df.columns),
+                        "tournament": tournament,
+                        "year": year,
+                        "memory_size_kb": int(df.memory_usage(deep=True).sum() / 1024)
+                    }
+                
+                # Guardar archivo de metadatos
+                metadata_file = self.output_dir / 'pointbypoint' / 'metadata.json'
+                with open(metadata_file, 'w') as f:
+                    json.dump(metadata, f, indent=2)
+                
+                logger.info(f"Creado archivo de metadatos con información de {total_files} archivos")
+                
+                # Crear índice de partidos y puntos por torneo/año
+                try:
+                    # Agrupar archivos por torneo y año
+                    tournament_year_files = {}
+                    
+                    for name, df in results.items():
+                        # Extraer torneo y año de las columnas o del nombre
+                        if 'tournament' in df.columns and 'year' in df.columns and len(df) > 0:
+                            tournament = df['tournament'].iloc[0]
+                            year = df['year'].iloc[0]
+                        else:
+                            # Intentar extraer del nombre
+                            parts = name.split('_')
+                            tournament = parts[0] if len(parts) > 0 else "unknown"
+                            year = None
+                            for part in parts:
+                                if part.isdigit() and 1990 <= int(part) <= 2025:
+                                    year = int(part)
+                                    break
+                            if year is None:
+                                year = "unknown"
+                        
+                        key = f"{tournament}_{year}"
+                        if key not in tournament_year_files:
+                            tournament_year_files[key] = []
+                        
+                        tournament_year_files[key].append(name)
+                    
+                    # Crear y guardar el índice
+                    index = {
+                        "tournaments": {},
+                        "years": {}
+                    }
+                    
+                    for key, files in tournament_year_files.items():
+                        tournament, year = key.split('_')
+                        
+                        # Actualizar índice de torneos
+                        if tournament not in index["tournaments"]:
+                            index["tournaments"][tournament] = {}
+                        
+                        if year not in index["tournaments"][tournament]:
+                            index["tournaments"][tournament][year] = files
+                        else:
+                            index["tournaments"][tournament][year].extend(files)
+                        
+                        # Actualizar índice de años
+                        if year not in index["years"]:
+                            index["years"][year] = {}
+                        
+                        if tournament not in index["years"][year]:
+                            index["years"][year][tournament] = files
+                        else:
+                            index["years"][year][tournament].extend(files)
+                    
+                    # Guardar índice
+                    index_file = self.output_dir / 'pointbypoint' / 'index.json'
+                    with open(index_file, 'w') as f:
+                        json.dump(index, f, indent=2)
+                    
+                    logger.info(f"Creado índice de archivos por torneo y año")
+                except Exception as e:
+                    logger.warning(f"Error al crear índice por torneo/año: {str(e)}")
+                
+                # Intentar combinar datos de puntos por torneo/año para análisis más fácil
+                try:
+                    combined_points_by_tournament = {}
+                    
+                    for name, df in results.items():
+                        if 'point' in name.lower() and len(df) > 0:
+                            # Determinar el torneo
+                            tournament = df['tournament'].iloc[0] if 'tournament' in df.columns else "unknown"
+                            
+                            if tournament not in combined_points_by_tournament:
+                                combined_points_by_tournament[tournament] = []
+                            
+                            combined_points_by_tournament[tournament].append(df)
+                    
+                    # Combinar y guardar por torneo
+                    for tournament, dfs in combined_points_by_tournament.items():
+                        if len(dfs) > 1:
+                            try:
+                                combined_df = pd.concat(dfs, ignore_index=True)
+                                output_file = self.output_dir / 'pointbypoint' / f"{tournament}_all_points_combined.csv"
+                                combined_df.to_csv(output_file, index=False)
+                                logger.info(f"Creado archivo combinado para {tournament}: {len(combined_df)} registros")
+                            except Exception as e:
+                                logger.warning(f"Error al combinar puntos para {tournament}: {str(e)}")
+                except Exception as e:
+                    logger.warning(f"Error al intentar combinar datos de puntos por torneo: {str(e)}")
+            
+            except Exception as e:
+                logger.warning(f"Error al crear archivo de metadatos: {str(e)}")
         else:
-            logger.info(f"Se encontraron {len(files)} archivos en el repositorio de datos punto por punto de Grand Slam")
+            logger.warning("No se pudieron encontrar archivos de datos punto por punto.")
+        
+        return results
+    
+    def _download_pointbypoint_via_github(self) -> Dict[str, pd.DataFrame]:
+        """
+        Descarga datos punto por punto utilizando la API de GitHub.
+        Esta función obtiene la lista completa de archivos CSV en el repositorio 
+        sin depender de adivinar rutas o nombres.
+        
+        Returns:
+            Dict[str, pd.DataFrame]: Diccionario con los DataFrames descargados
+        """
+        results = {}
+        
+        logger.info("Iniciando descarga de datos punto por punto mediante API de GitHub...")
+        
+        # Repositorio a explorar
+        repo = "JeffSackmann/tennis_pointbypoint"
+        
+        try:
+            # Obtener todos los archivos CSV del repositorio (profundidad máxima de 4 niveles)
+            # ya que este repositorio puede tener una estructura más anidada
+            csv_files = self._download_github_repo_files(repo, ['.csv'], max_depth=4)
+            
+            if not csv_files:
+                logger.warning(f"No se encontraron archivos CSV en {repo} vía GitHub API")
+                return results
+            
+            logger.info(f"Encontrados {len(csv_files)} archivos CSV en {repo} vía GitHub API")
+            
+            # Descargar todos los archivos encontrados
+            for file_path, download_url in csv_files.items():
+                # Crear un nombre único para este archivo
+                # Reemplazar / por _ para evitar problemas con rutas
+                safe_name = file_path.replace('/', '_').replace('-', '_').replace('.csv', '')
+                
+                # Si el nombre generado es demasiado largo, truncarlo de manera inteligente
+                if len(safe_name) > 100:
+                    # Extraer partes importantes (primero y últimos componentes)
+                    parts = safe_name.split('_')
+                    if len(parts) > 4:
+                        # Tomar el primer componente (generalmente el año o torneo) y los dos últimos
+                        safe_name = f"{parts[0]}_{parts[1]}__{parts[-2]}_{parts[-1]}"
+                
+                # Rutas de archivo
+                cache_file = self.cache_dir / 'pointbypoint' / f"{safe_name}.csv"
+                output_file = self.output_dir / 'pointbypoint' / f"{safe_name}.csv"
+                
+                try:
+                    logger.info(f"Descargando {file_path} desde GitHub API")
+                    response = self._make_request(download_url)
+                    content = response.content.decode('utf-8')
+                    
+                    # Intentar procesar como CSV
+                    try:
+                        df = pd.read_csv(StringIO(content))
+                        
+                        # Verificar si el archivo parece ser realmente datos de puntos
+                        # Algunas columnas comunes en archivos punto por punto
+                        point_columns = ['point_no', 'point_id', 'server', 'receiver', 'winner', 'p1_score', 'p2_score', 
+                                        'set_no', 'game_no', 'point_victor', 'serve_no']
+                        
+                        is_point_data = any(col in df.columns for col in point_columns)
+                        
+                        if is_point_data or len(df.columns) >= 5:  # Arquivos punto por punto suelen tener varias columnas
+                            # Extraer información del camino del archivo para enriquecer los datos
+                            parts = file_path.split('/')
+                            
+                            # Tratar de identificar torneo y año de la ruta
+                            tournament = None
+                            year = None
+                            
+                            for part in parts:
+                                # Detectar año
+                                if part.isdigit() and 1990 <= int(part) <= 2025:
+                                    year = int(part)
+                                
+                                # Detectar torneo
+                                tournaments = ["ausopen", "ao", "australian", "frenchopen", "fo", "rg", "roland", 
+                                            "usopen", "uso", "us_open", "wimbledon", "wim"]
+                                for t in tournaments:
+                                    if t in part.lower():
+                                        tournament = part
+                                        break
+                            
+                            # Añadir metadatos útiles si no existen
+                            if 'tournament' not in df.columns and tournament:
+                                df['tournament'] = tournament
+                            if 'year' not in df.columns and year:
+                                df['year'] = year
+                            
+                            # Añadir ruta original como referencia
+                            df['source_path'] = file_path
+                            
+                            # Guardar archivos
+                            cache_file.parent.mkdir(exist_ok=True)
+                            output_file.parent.mkdir(exist_ok=True)
+                            
+                            df.to_csv(cache_file, index=False)
+                            df.to_csv(output_file, index=False)
+                            
+                            results[safe_name] = df
+                            logger.info(f"Descargado archivo {safe_name}.csv vía GitHub API: {len(df)} registros")
+                        else:
+                            logger.debug(f"Omitiendo {file_path} - no parece contener datos punto por punto")
+                    except pd.errors.EmptyDataError:
+                        logger.warning(f"Archivo vacío: {file_path}")
+                    except pd.errors.ParserError:
+                        logger.warning(f"Error al parsear CSV: {file_path} - posiblemente no es un CSV válido")
+                except Exception as e:
+                    logger.warning(f"Error procesando {download_url}: {str(e)}")
+        
+        except Exception as e:
+            logger.warning(f"Error explorando {repo} vía GitHub API: {str(e)}")
+        
+        logger.info(f"Descarga vía GitHub API completada: {len(results)} archivos descargados")
+        return results
+
+    def _find_slam_pointbypoint_files(self) -> List[Dict[str, str]]:
+        files = []
+        base_url = f"{self.repo_base_url}{self.slam_pointbypoint_structure['repo']}"
+        
+        # Añadir verificación directa de archivos conocidos
+        known_files = [
+            {"tournament": "ausopen", "years": [2017, 2018, 2019, 2020]},
+            {"tournament": "frenchopen", "years": [2017, 2018, 2019, 2020]},
+            {"tournament": "usopen", "years": [2017, 2018, 2019, 2020, 2021]},
+            {"tournament": "wimbledon", "years": [2017, 2018, 2019]}
+        ]
+        
+        for tournament_info in known_files:
+            tournament = tournament_info["tournament"]
+            for year in tournament_info["years"]:
+                # Verificar varios patrones específicos que se sabe que existen
+                file_patterns = [
+                    f"{tournament}/{year}/points.csv",
+                    f"{year}/{tournament}/points.csv",
+                    f"{tournament}_{year}/points.csv",
+                    f"{tournament}/{year}.csv",
+                    f"{tournament}/points_{year}.csv"
+                ]
+                
+                for pattern in file_patterns:
+                    file_url = f"{base_url}/{pattern}"
+                    if self._check_file_exists(file_url):
+                        files.append({
+                            'name': f"{tournament}_{year}",
+                            'url': file_url
+                        })
+                        logger.info(f"Encontrado archivo punto por punto: {pattern}")
+                        break
         
         return files
 
-    def _download_match_charting_data_robust(self, data_name: str, url: str) -> pd.DataFrame:
+    def _download_match_charting_data(self) -> Dict[str, pd.DataFrame]:
         """
-        Descarga datos del Match Charting Project con manejo robusto de errores.
+        Descarga todos los datos disponibles del Match Charting Project desde el repositorio oficial.
+        Implementa una búsqueda exhaustiva para encontrar todos los archivos y formatos posibles.
+        
+        Returns:
+            Dict[str, pd.DataFrame]: Diccionario con los DataFrames descargados
+        """
+        results = {}
+        
+        # URL base del repositorio oficial
+        base_url = "https://raw.githubusercontent.com/JeffSackmann/tennis_MatchChartingProject/master"
+        
+        logger.info("=== Descargando datos completos del Match Charting Project ===")
+        
+        # 1. Primero verificar que podemos acceder al repositorio
+        readme_url = f"{base_url}/README.md"
+        if not self._check_file_exists(readme_url):
+            logger.warning("No se puede acceder al repositorio Match Charting Project. Verificando URL alternativa...")
+            alt_url = "https://raw.githubusercontent.com/JeffSackmann/tennis-atp-charting/master/README.md"
+            if not self._check_file_exists(alt_url):
+                logger.error("No se puede acceder a ningún repositorio de Match Charting Project.")
+                return results
+            else:
+                # Si la URL alternativa funciona, actualizar la base
+                base_url = "https://raw.githubusercontent.com/JeffSackmann/tennis-atp-charting/master"
+                logger.info(f"Usando repositorio alternativo: {base_url}")
+        
+        # 2. Estructurar la búsqueda para ser más exhaustiva
+        
+        # 2.1 Definir todas las posibles ubicaciones de archivos
+        locations = [
+            "",  # Directorio raíz
+            "data/",
+            "csv/",
+            "matches/",
+            "stats/",
+            "charting/"
+        ]
+        
+        # 2.2 Definir todos los posibles nombres de archivos
+        file_patterns = [
+            # Archivos principales
+            "matches.csv",
+            "shots.csv",
+            "charting-m-stats.csv",
+            "charting-w-stats.csv",
+            "charting-m-matches.csv",
+            "charting-w-matches.csv",
+            
+            # Posibles variantes
+            "match_stats.csv",
+            "match_charting.csv",
+            "charting_matches.csv",
+            "charting_shots.csv",
+            "matches_all.csv",
+            "shots_all.csv",
+            "match_data.csv",
+            "player_stats.csv",
+            "rally_stats.csv",
+            "serve_stats.csv",
+            "return_stats.csv",
+            
+            # Subdivisiones posibles
+            "atp_matches_charted.csv",
+            "wta_matches_charted.csv",
+            "atp_shots.csv",
+            "wta_shots.csv",
+            "mens_matches.csv",
+            "womens_matches.csv",
+            "mens_shots.csv",
+            "womens_shots.csv",
+            
+            # Combinaciones adicionales
+            "all_matches.csv",
+            "all_shots.csv",
+            "complete_dataset.csv",
+            "full_matches.csv",
+            "all_match_stats.csv"
+        ]
+        
+        # 3. Buscar sistemáticamente en cada ubicación
+        for location in locations:
+            logger.info(f"Explorando directorio: {base_url}/{location}")
+            location_found_files = 0
+            
+            for file_pattern in file_patterns:
+                url = f"{base_url}/{location}{file_pattern}"
+                try:
+                    if self._check_file_exists(url):
+                        logger.info(f"Encontrado archivo: {location}{file_pattern}")
+                        
+                        # Crear un nombre único para el archivo de salida
+                        # Reemplazar guiones con guiones bajos para consistencia
+                        output_name = file_pattern.replace('-', '_').replace('.csv', '')
+                        if location:
+                            # Incluir la ruta en el nombre para evitar colisiones
+                            output_name = f"{location.replace('/', '_')}{output_name}"
+                        
+                        # Descargar y procesar el archivo
+                        cache_file = self.cache_dir / 'match_charting' / f"{output_name}.csv"
+                        output_file = self.output_dir / 'match_charting' / f"{output_name}.csv"
+                        
+                        try:
+                            response = self._make_request(url)
+                            content = response.content.decode('utf-8')
+                            df = pd.read_csv(StringIO(content))
+                            
+                            # Guardar el archivo en caché y en el directorio de salida
+                            cache_file.parent.mkdir(exist_ok=True)
+                            output_file.parent.mkdir(exist_ok=True)
+                            
+                            df.to_csv(cache_file, index=False)
+                            df.to_csv(output_file, index=False)
+                            
+                            results[output_name] = df
+                            location_found_files += 1
+                            logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                        except Exception as e:
+                            logger.warning(f"Error procesando {url}: {str(e)}")
+                except Exception as e:
+                    # No loggear errores de verificación para reducir ruido
+                    pass
+            
+            logger.info(f"Encontrados {location_found_files} archivos en {location if location else 'directorio raíz'}")
+        
+        # 4. Buscar en posibles directorios estructurados por año
+        years = range(2010, 2025)  # Ajustar rango según sea necesario
+        
+        for year in years:
+            year_dir = f"{year}/"
+            year_url = f"{base_url}/{year_dir}"
+            
+            # Verificar si existe un subdirectorio para este año
+            for test_file in ["index.html", "README.md", "matches.csv"]:
+                test_url = f"{year_url}{test_file}"
+                if self._check_file_exists(test_url):
+                    logger.info(f"Encontrado directorio para año {year}")
+                    
+                    # Buscar archivos en ese directorio
+                    for file_pattern in file_patterns:
+                        file_url = f"{year_url}{file_pattern}"
+                        if self._check_file_exists(file_url):
+                            logger.info(f"Encontrado archivo para año {year}: {file_pattern}")
+                            
+                            output_name = f"{year}_{file_pattern.replace('-', '_').replace('.csv', '')}"
+                            cache_file = self.cache_dir / 'match_charting' / f"{output_name}.csv"
+                            output_file = self.output_dir / 'match_charting' / f"{output_name}.csv"
+                            
+                            try:
+                                response = self._make_request(file_url)
+                                content = response.content.decode('utf-8')
+                                df = pd.read_csv(StringIO(content))
+                                
+                                cache_file.parent.mkdir(exist_ok=True)
+                                output_file.parent.mkdir(exist_ok=True)
+                                
+                                df.to_csv(cache_file, index=False)
+                                df.to_csv(output_file, index=False)
+                                
+                                results[output_name] = df
+                                logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                            except Exception as e:
+                                logger.warning(f"Error procesando {file_url}: {str(e)}")
+                    
+                    # Solo necesitamos verificar un archivo para confirmar que existe el directorio
+                    break
+        
+        # 5. Buscar en URL alternativa si aún no se han encontrado suficientes archivos
+        if len(results) < 3:  # Si hemos encontrado menos de 3 archivos, intentar con URL alternativa
+            alt_base_url = "https://raw.githubusercontent.com/JeffSackmann/tennis-atp-charting/master"
+            logger.info(f"Buscando archivos en repositorio alternativo: {alt_base_url}")
+            
+            for file_pattern in file_patterns:
+                alt_url = f"{alt_base_url}/{file_pattern}"
+                if self._check_file_exists(alt_url):
+                    logger.info(f"Encontrado archivo en repositorio alternativo: {file_pattern}")
+                    
+                    output_name = f"alt_{file_pattern.replace('-', '_').replace('.csv', '')}"
+                    cache_file = self.cache_dir / 'match_charting' / f"{output_name}.csv"
+                    output_file = self.output_dir / 'match_charting' / f"{output_name}.csv"
+                    
+                    try:
+                        response = self._make_request(alt_url)
+                        content = response.content.decode('utf-8')
+                        df = pd.read_csv(StringIO(content))
+                        
+                        cache_file.parent.mkdir(exist_ok=True)
+                        output_file.parent.mkdir(exist_ok=True)
+                        
+                        df.to_csv(cache_file, index=False)
+                        df.to_csv(output_file, index=False)
+                        
+                        results[output_name] = df
+                        logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                    except Exception as e:
+                        logger.warning(f"Error procesando {alt_url}: {str(e)}")
+        
+        # 6. Comprobar proyecto en GitHub directamente si es necesario
+        if len(results) < 2:
+            logger.info("Intentando obtener información del repositorio directamente vía GitHub API...")
+            github_url = "https://api.github.com/repos/JeffSackmann/tennis_MatchChartingProject/contents"
+            
+            try:
+                response = self._make_request(github_url)
+                if response.status_code == 200:
+                    contents = response.json()
+                    logger.info(f"Obtenida estructura del repositorio: {len(contents)} elementos")
+                    
+                    # Analizar la estructura e identificar archivos CSV y directorios
+                    for item in contents:
+                        if item['type'] == 'file' and item['name'].endswith('.csv'):
+                            logger.info(f"Encontrado archivo via GitHub API: {item['name']}")
+                            
+                            # Descargar el archivo usando la URL raw
+                            file_url = item['download_url']
+                            output_name = f"gh_{item['name'].replace('-', '_').replace('.csv', '')}"
+                            
+                            cache_file = self.cache_dir / 'match_charting' / f"{output_name}.csv"
+                            output_file = self.output_dir / 'match_charting' / f"{output_name}.csv"
+                            
+                            try:
+                                file_response = self._make_request(file_url)
+                                content = file_response.content.decode('utf-8')
+                                df = pd.read_csv(StringIO(content))
+                                
+                                cache_file.parent.mkdir(exist_ok=True)
+                                output_file.parent.mkdir(exist_ok=True)
+                                
+                                df.to_csv(cache_file, index=False)
+                                df.to_csv(output_file, index=False)
+                                
+                                results[output_name] = df
+                                logger.info(f"Descargado archivo {output_name}.csv: {len(df)} registros")
+                            except Exception as e:
+                                logger.warning(f"Error procesando {file_url}: {str(e)}")
+                        
+                        elif item['type'] == 'dir':
+                            # Registrar directorios pero no los exploramos por ahora
+                            logger.info(f"Encontrado directorio via GitHub API: {item['name']}")
+            except Exception as e:
+                logger.warning(f"Error accediendo a GitHub API: {str(e)}")
+        
+        # 7. Intentar método de último recurso: verificar archivos conocidos específicos
+        # que pueden existir en ubicaciones no estándar
+        last_resort_files = [
+            "https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/match_charting/matches.csv",
+            "https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/match_charting/matches.csv",
+            "https://raw.githubusercontent.com/JeffSackmann/tennis_MatchChartingProject/main/matches.csv",  # Rama main en lugar de master
+            "https://raw.githubusercontent.com/JeffSackmann/tennis_MatchChartingProject/master/data/All_Matches.csv",
+            "https://raw.githubusercontent.com/JeffSackmann/tennis_MatchChartingProject/master/Match_Stats/all_matches.csv",
+            "https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/charting/charting-m-stats.csv"
+        ]
+        
+        for url in last_resort_files:
+            if self._check_file_exists(url):
+                logger.info(f"Encontrado archivo de último recurso: {url}")
+                
+                # Extraer nombre de archivo de la URL
+                file_name = os.path.basename(url)
+                output_name = f"lr_{file_name.replace('-', '_').replace('.csv', '')}"
+                
+                cache_file = self.cache_dir / 'match_charting' / f"{output_name}.csv"
+                output_file = self.output_dir / 'match_charting' / f"{output_name}.csv"
+                
+                try:
+                    response = self._make_request(url)
+                    content = response.content.decode('utf-8')
+                    df = pd.read_csv(StringIO(content))
+                    
+                    cache_file.parent.mkdir(exist_ok=True)
+                    output_file.parent.mkdir(exist_ok=True)
+                    
+                    df.to_csv(cache_file, index=False)
+                    df.to_csv(output_file, index=False)
+                    
+                    results[output_name] = df
+                    logger.info(f"Descargado archivo de último recurso {output_name}.csv: {len(df)} registros")
+                except Exception as e:
+                    logger.warning(f"Error procesando {url}: {str(e)}")
+        
+        # 8. Combinar archivos similares si es necesario
+        try:
+            # Identificar archivos que son del mismo tipo
+            match_dfs = []
+            shots_dfs = []
+            stats_dfs = []
+            
+            for name, df in results.items():
+                if 'match' in name.lower() and 'stat' not in name.lower() and 'shot' not in name.lower():
+                    match_dfs.append((name, df))
+                elif 'shot' in name.lower():
+                    shots_dfs.append((name, df))
+                elif 'stat' in name.lower():
+                    stats_dfs.append((name, df))
+            
+            # Combinar matches si hay más de uno
+            if len(match_dfs) > 1:
+                logger.info(f"Combinando {len(match_dfs)} archivos de partidos...")
+                match_names = [name for name, _ in match_dfs]
+                combined_matches = pd.concat([df for _, df in match_dfs], ignore_index=True)
+                
+                # Eliminar duplicados si los hay
+                if 'match_id' in combined_matches.columns:
+                    orig_len = len(combined_matches)
+                    combined_matches = combined_matches.drop_duplicates(subset=['match_id'])
+                    if len(combined_matches) < orig_len:
+                        logger.info(f"Eliminados {orig_len - len(combined_matches)} duplicados por match_id")
+                
+                # Guardar el archivo combinado
+                output_file = self.output_dir / 'match_charting' / f"all_matches_combined.csv"
+                combined_matches.to_csv(output_file, index=False)
+                
+                results['all_matches_combined'] = combined_matches
+                logger.info(f"Creado archivo combinado de partidos: {len(combined_matches)} registros")
+            
+            # Combinar shots si hay más de uno
+            if len(shots_dfs) > 1:
+                logger.info(f"Combinando {len(shots_dfs)} archivos de tiros...")
+                shot_names = [name for name, _ in shots_dfs]
+                combined_shots = pd.concat([df for _, df in shots_dfs], ignore_index=True)
+                
+                # Guardar el archivo combinado
+                output_file = self.output_dir / 'match_charting' / f"all_shots_combined.csv"
+                combined_shots.to_csv(output_file, index=False)
+                
+                results['all_shots_combined'] = combined_shots
+                logger.info(f"Creado archivo combinado de tiros: {len(combined_shots)} registros")
+            
+            # Combinar stats si hay más de uno
+            if len(stats_dfs) > 1:
+                logger.info(f"Combinando {len(stats_dfs)} archivos de estadísticas...")
+                stat_names = [name for name, _ in stats_dfs]
+                combined_stats = pd.concat([df for _, df in stats_dfs], ignore_index=True)
+                
+                # Guardar el archivo combinado
+                output_file = self.output_dir / 'match_charting' / f"all_stats_combined.csv"
+                combined_stats.to_csv(output_file, index=False)
+                
+                results['all_stats_combined'] = combined_stats
+                logger.info(f"Creado archivo combinado de estadísticas: {len(combined_stats)} registros")
+        
+        except Exception as e:
+            logger.warning(f"Error al intentar combinar archivos similares: {str(e)}")
+        
+        # Resumen final
+        if results:
+            logger.info(f"Se descargaron {len(results)} archivos del Match Charting Project.")
+            
+            # Crear un archivo de resumen para facilitar la comprensión de los datos
+            try:
+                summary = {
+                    "total_files": len(results),
+                    "files": {}
+                }
+                
+                for name, df in results.items():
+                    summary["files"][name] = {
+                        "rows": len(df),
+                        "columns": list(df.columns),
+                        "size_kb": df.memory_usage(deep=True).sum() / 1024
+                    }
+                
+                summary_file = self.output_dir / 'match_charting' / 'summary.json'
+                with open(summary_file, 'w') as f:
+                    json.dump(summary, f, indent=2)
+                
+                logger.info(f"Creado archivo de resumen: {summary_file}")
+            except Exception as e:
+                logger.warning(f"Error al crear archivo de resumen: {str(e)}")
+        else:
+            logger.warning("No se pudieron encontrar archivos del Match Charting Project.")
+        
+        return results
+    
+    def _get_github_repo_contents(self, repo_path: str, directory: str = "") -> List[Dict]:
+        """
+        Obtiene la lista de archivos y directorios en un repositorio GitHub usando la API.
         
         Args:
-            data_name: Nombre del conjunto de datos
-            url: URL del archivo a descargar
-            
+            repo_path: Ruta del repositorio (formato: 'usuario/repo')
+            directory: Directorio dentro del repositorio (opcional)
+        
         Returns:
-            DataFrame con datos del Match Charting Project
+            Lista de diccionarios con información de los archivos/directorios
         """
+        url = f"https://api.github.com/repos/{repo_path}/contents"
+        if directory:
+            url = f"{url}/{directory}"
+        
+        logger.info(f"Obteniendo contenidos de GitHub: {url}")
+        
         try:
-            # Formar ruta de caché
-            filename = os.path.basename(url)
-            cache_file = self.cache_dir / 'match_charting' / f"{filename}"
+            # Usar headers para evitar límites de tasa
+            headers = {
+                "Accept": "application/vnd.github+json",
+                "User-Agent": self.user_agent
+            }
             
-            # Descargar datos
-            logger.info(f"Descargando datos de {data_name.replace('_', ' ').title()} del Match Charting Project...")
-            df = self._download_file(url, cache_file)
+            response = self.session.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
             
-            # Verificar si hay datos
-            if df.empty:
-                logger.warning(f"No hay datos de {data_name.replace('_', ' ').title()} del Match Charting Project")
-                return pd.DataFrame()
+            contents = response.json()
             
-            # Información básica
-            logger.info(f"Datos de {data_name.replace('_', ' ').title()} del Match Charting Project descargados: {len(df)} registros")
+            # Si es un solo archivo (no una lista), convertirlo a lista
+            if not isinstance(contents, list):
+                contents = [contents]
             
-            # Guardar en directorio de salida
-            output_file = self.output_dir / 'match_charting' / f"{filename}"
-            output_file.parent.mkdir(exist_ok=True)
-            df.to_csv(output_file, index=False)
-            
-            logger.info(f"Datos de {data_name.replace('_', ' ').title()} del Match Charting Project guardados en {output_file}")
-            
-            return df
+            return contents
             
         except Exception as e:
-            logger.warning(f"Error descargando datos de {data_name.replace('_', ' ').title()} del Match Charting Project: {str(e)}")
-            return pd.DataFrame()
+            logger.warning(f"Error obteniendo contenidos de GitHub: {str(e)}")
+            return []
 
-    def _find_match_charting_files(self) -> List[Dict[str, str]]:
+    def _download_github_repo_files(self, repo_path: str, file_types: List[str] = ['.csv'], 
+                                max_depth: int = 2, directory: str = "", current_depth: int = 0) -> Dict[str, str]:
         """
-        Encuentra archivos disponibles en el repositorio Match Charting Project.
+        Descarga todos los archivos de ciertos tipos de un repositorio GitHub recursivamente.
+        
+        Args:
+            repo_path: Ruta del repositorio (formato: 'usuario/repo')
+            file_types: Lista de extensiones de archivo a buscar (por defecto solo CSV)
+            max_depth: Profundidad máxima de recursión
+            directory: Directorio actual dentro del repositorio
+            current_depth: Profundidad actual de recursión
         
         Returns:
-            Lista de diccionarios con información de los archivos
+            Diccionario con rutas de archivos y sus URLs
         """
-        files = []
+        if current_depth > max_depth:
+            return {}
         
-        # Intentar con archivos principales esperados
+        result = {}
+        contents = self._get_github_repo_contents(repo_path, directory)
+        
+        for item in contents:
+            # Archivos
+            if item['type'] == 'file':
+                file_name = item['name']
+                file_path = f"{directory}/{file_name}" if directory else file_name
+                
+                # Verificar si la extensión del archivo coincide con alguna de las buscadas
+                if any(file_name.endswith(ext) for ext in file_types):
+                    result[file_path] = item['download_url']
+                    logger.debug(f"Encontrado archivo {file_path}")
+            
+            # Directorios (recursión)
+            elif item['type'] == 'dir' and current_depth < max_depth:
+                dir_name = item['name']
+                dir_path = f"{directory}/{dir_name}" if directory else dir_name
+                
+                # Obtener archivos del subdirectorio
+                sub_files = self._download_github_repo_files(
+                    repo_path, 
+                    file_types, 
+                    max_depth, 
+                    dir_path, 
+                    current_depth + 1
+                )
+                
+                # Añadir archivos del subdirectorio al resultado
+                result.update(sub_files)
+        
+        return result
+
+    def _download_match_charting_via_github(self) -> Dict[str, pd.DataFrame]:
+        """
+        Descarga todos los archivos CSV del Match Charting Project directamente usando la API de GitHub.
+        Esta función no depende de adivinar nombres de archivos, sino que obtiene la lista completa.
+        
+        Returns:
+            Dict[str, pd.DataFrame]: Diccionario con los DataFrames descargados
+        """
+        results = {}
+        
+        # Repositorios a verificar
+        repos = [
+            "JeffSackmann/tennis_MatchChartingProject",
+            "JeffSackmann/tennis-atp-charting",
+            "JeffSackmann/tennis-wta-charting"  # Por si acaso existe
+        ]
+        
+        total_files_found = 0
+        
+        for repo in repos:
+            logger.info(f"Explorando repositorio GitHub: {repo}")
+            
+            try:
+                # Obtener todos los archivos CSV del repositorio (profundidad máxima de 3 niveles)
+                csv_files = self._download_github_repo_files(repo, ['.csv'], max_depth=3)
+                
+                if not csv_files:
+                    logger.info(f"No se encontraron archivos CSV en {repo}")
+                    continue
+                
+                logger.info(f"Encontrados {len(csv_files)} archivos CSV en {repo}")
+                
+                # Descargar cada archivo encontrado
+                for file_path, download_url in csv_files.items():
+                    # Crear un nombre único para este archivo
+                    safe_name = file_path.replace('/', '_').replace('-', '_').replace('.csv', '')
+                    repo_prefix = repo.split('/')[1].replace('-', '_')
+                    output_name = f"{repo_prefix}_{safe_name}"
+                    
+                    # Rutas de archivo
+                    cache_file = self.cache_dir / 'match_charting' / f"{output_name}.csv"
+                    output_file = self.output_dir / 'match_charting' / f"{output_name}.csv"
+                    
+                    try:
+                        logger.info(f"Descargando {file_path} desde {download_url}")
+                        response = self._make_request(download_url)
+                        content = response.content.decode('utf-8')
+                        df = pd.read_csv(StringIO(content))
+                        
+                        # Guardar archivos
+                        cache_file.parent.mkdir(exist_ok=True)
+                        output_file.parent.mkdir(exist_ok=True)
+                        
+                        df.to_csv(cache_file, index=False)
+                        df.to_csv(output_file, index=False)
+                        
+                        results[output_name] = df
+                        total_files_found += 1
+                        
+                        logger.info(f"Descargado {file_path}: {len(df)} registros")
+                    except Exception as e:
+                        logger.warning(f"Error procesando {download_url}: {str(e)}")
+            except Exception as e:
+                logger.warning(f"Error explorando {repo}: {str(e)}")
+        
+        logger.info(f"Total de archivos descargados vía GitHub API: {total_files_found}")
+        return results
+    
+    def collect_match_charting_data(self) -> Dict[str, pd.DataFrame]:
+        """
+        Función principal para recopilar todos los datos del Match Charting Project.
+        Combina múltiples estrategias para garantizar la captura completa de datos.
+        
+        Returns:
+            Dict[str, pd.DataFrame]: Diccionario con todos los datos recopilados
+        """
+        logger.info("=== Iniciando recopilación exhaustiva de datos del Match Charting Project ===")
+        
+        results = {}
+        
+        # 1. Primer intento: método tradicional optimizado
+        traditional_results = self._download_match_charting_data()
+        if traditional_results:
+            logger.info(f"Método tradicional encontró {len(traditional_results)} archivos")
+            results.update(traditional_results)
+        
+        # 2. Segundo intento: usando API de GitHub (más completo)
+        if len(results) < 5:  # Si el primer método no encontró suficientes archivos
+            logger.info("Intentando método de API de GitHub para descubrimiento completo de archivos")
+            github_results = self._download_match_charting_via_github()
+            
+            # Añadir solo archivos que no se hayan encontrado antes
+            for name, df in github_results.items():
+                if name not in results:
+                    results[name] = df
+                    logger.info(f"Añadido archivo {name} vía GitHub API: {len(df)} registros")
+        
+        # 3. Análisis y procesamiento de los datos recopilados
+        if results:
+            # Categorizar archivos por tipo
+            matches_files = {}
+            shots_files = {}
+            stats_files = {}
+            other_files = {}
+            
+            for name, df in results.items():
+                name_lower = name.lower()
+                
+                if 'match' in name_lower and 'stat' not in name_lower:
+                    matches_files[name] = df
+                elif 'shot' in name_lower:
+                    shots_files[name] = df
+                elif 'stat' in name_lower:
+                    stats_files[name] = df
+                else:
+                    other_files[name] = df
+            
+            logger.info(f"Archivos categorizados - Partidos: {len(matches_files)}, Tiros: {len(shots_files)}, "
+                    f"Estadísticas: {len(stats_files)}, Otros: {len(other_files)}")
+            
+            # Combinación de archivos por categoría
+            
+            # Combinar archivos de partidos
+            if len(matches_files) > 0:
+                try:
+                    # Si hay varios archivos, intentar combinarlos
+                    if len(matches_files) > 1:
+                        combined_matches = pd.concat(matches_files.values(), ignore_index=True)
+                        
+                        # Eliminar duplicados si es posible
+                        if 'match_id' in combined_matches.columns:
+                            orig_len = len(combined_matches)
+                            combined_matches.drop_duplicates(subset=['match_id'], inplace=True)
+                            if len(combined_matches) < orig_len:
+                                logger.info(f"Eliminados {orig_len - len(combined_matches)} duplicados de partidos")
+                        
+                        # Guardar archivo combinado
+                        output_file = self.output_dir / 'match_charting' / 'all_matches_combined.csv'
+                        combined_matches.to_csv(output_file, index=False)
+                        
+                        results['all_matches_combined'] = combined_matches
+                        logger.info(f"Creado archivo combinado de partidos: {len(combined_matches)} registros")
+                    else:
+                        # Si solo hay un archivo, usarlo como archivo principal
+                        key, df = next(iter(matches_files.items()))
+                        logger.info(f"Usando {key} como archivo principal de partidos: {len(df)} registros")
+                except Exception as e:
+                    logger.warning(f"Error al combinar archivos de partidos: {str(e)}")
+            
+            # Combinar archivos de tiros/shots
+            if len(shots_files) > 0:
+                try:
+                    # Si hay varios archivos, intentar combinarlos
+                    if len(shots_files) > 1:
+                        combined_shots = pd.concat(shots_files.values(), ignore_index=True)
+                        
+                        # Eliminar duplicados si es posible
+                        if 'shot_id' in combined_shots.columns:
+                            orig_len = len(combined_shots)
+                            combined_shots.drop_duplicates(subset=['shot_id'], inplace=True)
+                            if len(combined_shots) < orig_len:
+                                logger.info(f"Eliminados {orig_len - len(combined_shots)} duplicados de tiros")
+                        elif 'point_id' in combined_shots.columns and 'shot_no' in combined_shots.columns:
+                            orig_len = len(combined_shots)
+                            combined_shots.drop_duplicates(subset=['point_id', 'shot_no'], inplace=True)
+                            if len(combined_shots) < orig_len:
+                                logger.info(f"Eliminados {orig_len - len(combined_shots)} duplicados de tiros")
+                        
+                        # Guardar archivo combinado
+                        output_file = self.output_dir / 'match_charting' / 'all_shots_combined.csv'
+                        combined_shots.to_csv(output_file, index=False)
+                        
+                        results['all_shots_combined'] = combined_shots
+                        logger.info(f"Creado archivo combinado de tiros: {len(combined_shots)} registros")
+                    else:
+                        # Si solo hay un archivo, usarlo como archivo principal
+                        key, df = next(iter(shots_files.items()))
+                        logger.info(f"Usando {key} como archivo principal de tiros: {len(df)} registros")
+                except Exception as e:
+                    logger.warning(f"Error al combinar archivos de tiros: {str(e)}")
+            
+            # Combinar archivos de estadísticas
+            if len(stats_files) > 0:
+                try:
+                    # Si hay varios archivos, intentar combinarlos
+                    if len(stats_files) > 1:
+                        # Revisar si los archivos tienen estructuras compatibles
+                        column_sets = [set(df.columns) for df in stats_files.values()]
+                        common_columns = set.intersection(*column_sets) if column_sets else set()
+                        
+                        if common_columns:
+                            logger.info(f"Archivos de estadísticas tienen {len(common_columns)} columnas en común")
+                            
+                            # Intentar combinar usando solo columnas comunes
+                            combined_stats = pd.concat([df[list(common_columns)] for df in stats_files.values()], 
+                                                    ignore_index=True)
+                            
+                            # Eliminar duplicados si es posible
+                            if 'match_id' in combined_stats.columns and 'player_id' in combined_stats.columns:
+                                orig_len = len(combined_stats)
+                                combined_stats.drop_duplicates(subset=['match_id', 'player_id'], inplace=True)
+                                if len(combined_stats) < orig_len:
+                                    logger.info(f"Eliminados {orig_len - len(combined_stats)} duplicados de estadísticas")
+                            
+                            # Guardar archivo combinado
+                            output_file = self.output_dir / 'match_charting' / 'all_stats_combined.csv'
+                            combined_stats.to_csv(output_file, index=False)
+                            
+                            results['all_stats_combined'] = combined_stats
+                            logger.info(f"Creado archivo combinado de estadísticas: {len(combined_stats)} registros")
+                        else:
+                            logger.warning("No se pudieron combinar archivos de estadísticas: estructuras incompatibles")
+                            
+                            # Guardar cada archivo por separado con nombres descriptivos
+                            for i, (key, df) in enumerate(stats_files.items()):
+                                output_file = self.output_dir / 'match_charting' / f"stats_group_{i+1}.csv"
+                                df.to_csv(output_file, index=False)
+                                logger.info(f"Guardado archivo de estadísticas {i+1}: {len(df)} registros")
+                    else:
+                        # Si solo hay un archivo, usarlo como archivo principal
+                        key, df = next(iter(stats_files.items()))
+                        logger.info(f"Usando {key} como archivo principal de estadísticas: {len(df)} registros")
+                except Exception as e:
+                    logger.warning(f"Error al combinar archivos de estadísticas: {str(e)}")
+            
+            # 4. Crear archivo de metadatos para facilitar el uso posterior
+            try:
+                metadata = {
+                    "collection_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "total_files": len(results),
+                    "categories": {
+                        "matches": len(matches_files),
+                        "shots": len(shots_files),
+                        "stats": len(stats_files),
+                        "other": len(other_files)
+                    },
+                    "combined_files": [],
+                    "file_details": {}
+                }
+                
+                # Registrar archivos combinados
+                if 'all_matches_combined' in results:
+                    metadata["combined_files"].append({
+                        "name": "all_matches_combined.csv",
+                        "records": len(results['all_matches_combined']),
+                        "source_files": list(matches_files.keys())
+                    })
+                
+                if 'all_shots_combined' in results:
+                    metadata["combined_files"].append({
+                        "name": "all_shots_combined.csv",
+                        "records": len(results['all_shots_combined']),
+                        "source_files": list(shots_files.keys())
+                    })
+                
+                if 'all_stats_combined' in results:
+                    metadata["combined_files"].append({
+                        "name": "all_stats_combined.csv",
+                        "records": len(results['all_stats_combined']),
+                        "source_files": list(stats_files.keys())
+                    })
+                
+                # Registrar detalles de cada archivo individual
+                for name, df in results.items():
+                    if name not in ['all_matches_combined', 'all_shots_combined', 'all_stats_combined']:
+                        metadata["file_details"][name] = {
+                            "records": len(df),
+                            "columns": list(df.columns),
+                            "memory_size_kb": int(df.memory_usage(deep=True).sum() / 1024)
+                        }
+                
+                # Guardar archivo de metadatos
+                metadata_file = self.output_dir / 'match_charting' / 'metadata.json'
+                with open(metadata_file, 'w') as f:
+                    json.dump(metadata, f, indent=2)
+                
+                logger.info(f"Creado archivo de metadatos con información de {len(results)} archivos")
+            except Exception as e:
+                logger.warning(f"Error al crear archivo de metadatos: {str(e)}")
+        
+        else:
+            logger.warning("No se encontraron archivos del Match Charting Project usando ningún método")
+        
+        # Resumen final
+        logger.info(f"=== Recopilación de datos del Match Charting Project completada ===")
+        logger.info(f"Total de archivos recopilados: {len(results)}")
+        
+        return results
+
+    def _find_match_charting_files(self) -> List[Dict[str, str]]:
+        files = []
         base_url = f"{self.repo_base_url}{self.match_charting_structure['repo']}"
         
-        # Comprobar si hay README para entender la estructura
-        readme_url = f"{base_url}/README.md"
-        if self._check_file_exists(readme_url):
-            logger.debug("Encontrado README en repositorio Match Charting Project")
+        # Añadir verificación directa de archivos conocidos que existen actualmente
+        known_files = [
+            "charting-m-stats.csv",
+            "charting-w-stats.csv", 
+            "matches.csv",
+            "shots.csv"
+        ]
         
-        # 1. Probar con archivos principales
-        for file_key, filename in self.match_charting_structure['files'].items():
-            file_url = f"{base_url}/{filename}"
-            if self._check_file_exists(file_url):
-                files.append({
-                    'name': file_key,
-                    'url': file_url
-                })
-                logger.info(f"Encontrado archivo principal de Match Charting Project: {filename}")
-        
-        # 2. Probar con archivos alternativos
-        for filename in self.match_charting_structure['alt_files']:
+        for filename in known_files:
             file_url = f"{base_url}/{filename}"
             if self._check_file_exists(file_url):
                 files.append({
                     'name': filename.replace('.csv', ''),
                     'url': file_url
                 })
-                logger.info(f"Encontrado archivo alternativo de Match Charting Project: {filename}")
+                logger.info(f"Encontrado archivo principal de Match Charting Project: {filename}")
         
-        # 3. Probar en subdirectorios posibles
-        for subdir in self.match_charting_structure['subdirs']:
-            subdir_url = f"{base_url}/{subdir}"
-            
-            # Comprobar archivos principales en subdirectorio
-            for file_key, filename in self.match_charting_structure['files'].items():
-                file_url = f"{subdir_url}/{filename}"
-                if self._check_file_exists(file_url):
-                    files.append({
-                        'name': f"{subdir}_{file_key}",
-                        'url': file_url
-                    })
-                    logger.info(f"Encontrado archivo en subdirectorio {subdir} de Match Charting Project: {filename}")
-            
-            # Comprobar archivos alternativos en subdirectorio
-            for filename in self.match_charting_structure['alt_files']:
-                file_url = f"{subdir_url}/{filename}"
-                if self._check_file_exists(file_url):
-                    files.append({
-                        'name': f"{subdir}_{filename.replace('.csv', '')}",
-                        'url': file_url
-                    })
-                    logger.info(f"Encontrado archivo alternativo en subdirectorio {subdir} de Match Charting Project: {filename}")
-        
-        # 4. Buscar en estructura año/torneo si no se encontró nada
+        # En caso de que los archivos estén en el directorio raíz
         if not files:
-            logger.info("Buscando archivos de Match Charting Project en estructura de año/torneo...")
-            
-            # Buscar en años recientes
-            recent_years = range(2010, datetime.now().year + 1)
-            for year in recent_years:
-                year_url = f"{base_url}/{year}"
-                
-                # Si existe una carpeta para el año, buscar dentro
-                readme_year_url = f"{year_url}/README.md"
-                if self._check_file_exists(readme_year_url) or self._check_file_exists(f"{year_url}/matches.csv"):
-                    
-                    # Comprobar archivos principales en la carpeta del año
-                    for file_key, filename in self.match_charting_structure['files'].items():
-                        file_url = f"{year_url}/{filename}"
-                        if self._check_file_exists(file_url):
-                            files.append({
-                                'name': f"{year}_{file_key}",
-                                'url': file_url
-                            })
-                            logger.info(f"Encontrado archivo de Match Charting Project para año {year}: {filename}")
-        
-        if not files:
-            logger.warning("No se encontraron archivos del Match Charting Project")
-        else:
-            logger.info(f"Se encontraron {len(files)} archivos en el repositorio Match Charting Project")
+            logger.info("Verificando archivos de Match Charting en directorio raíz")
+            file_url = f"{self.repo_base_url}/tennis_MatchChartingProject/master/matches.csv"
+            if self._check_file_exists(file_url):
+                files.append({
+                    'name': 'matches',
+                    'url': file_url
+                })
+                logger.info("Encontrado archivo matches.csv en directorio raíz")
         
         return files
-    
+
+def main():
+        """
+        Función principal para ejecutar el script de recopilación de datos.
+        Procesa argumentos de línea de comandos y ejecuta el colector.
+        
+        Ejemplo de uso:
+        python data_collector.py --start-year 2000 --end-year 2024 --tours atp wta
+        """
+        parser = argparse.ArgumentParser(description='Recopilador de datos de tenis de Jeff Sackmann.')
+        
+        # Argumentos obligatorios
+        parser.add_argument('--start-year', type=int, default=2000, 
+                            help='Año inicial para la recopilación (default: 2000)')
+        parser.add_argument('--end-year', type=int, default=datetime.now().year,
+                            help=f'Año final para la recopilación (default: {datetime.now().year})')
+        parser.add_argument('--tours', nargs='+', choices=['atp', 'wta'], default=['atp', 'wta'],
+                            help='Tours a recopilar (default: atp wta)')
+        
+        # Argumentos opcionales
+        parser.add_argument('--skip-challengers', action='store_true',
+                            help='No incluir datos de torneos Challenger')
+        parser.add_argument('--skip-futures', action='store_true',
+                            help='No incluir datos de torneos Futures/ITF')
+        parser.add_argument('--skip-rankings', action='store_true',
+                            help='No incluir datos de rankings')
+        parser.add_argument('--skip-pointbypoint', action='store_true',
+                            help='No incluir datos punto por punto generales')
+        parser.add_argument('--skip-slam-pointbypoint', action='store_true',
+                            help='No incluir datos punto por punto de Grand Slam')
+        parser.add_argument('--skip-match-charting', action='store_true',
+                            help='No incluir datos del Match Charting Project')
+        parser.add_argument('--force-refresh', action='store_true',
+                            help='Forzar la descarga de todos los datos (ignorar caché)')
+        parser.add_argument('--delay', type=float, default=0.2,
+                            help='Demora entre solicitudes en segundos (default: 0.2)')
+        
+        args = parser.parse_args()
+        
+        # Configurar logger para mostrar un mensaje de inicio
+        logger.info("====== INICIANDO RECOPILACIÓN DE DATOS DE TENIS ======")
+        logger.info(f"Período: {args.start_year}-{args.end_year}")
+        logger.info(f"Tours: {', '.join(args.tours)}")
+        
+        # Crear y configurar el colector
+        collector = TennisDataCollector(
+            start_year=args.start_year,
+            end_year=args.end_year,
+            tours=args.tours,
+            include_challengers=not args.skip_challengers,
+            include_futures=not args.skip_futures,
+            include_rankings=not args.skip_rankings,
+            include_pointbypoint=not args.skip_pointbypoint,
+            include_slam_pointbypoint=not args.skip_slam_pointbypoint,
+            include_match_charting=not args.skip_match_charting,
+            force_refresh=args.force_refresh,
+            delay_between_requests=args.delay
+        )
+        
+        # Ejecutar la recopilación
+        try:
+            logger.info("Iniciando proceso de recopilación...")
+            results = collector.collect_all_data()
+            logger.info("¡Recopilación de datos completada con éxito!")
+            
+            # Mostrar breve resumen
+            tours_str = ', '.join(args.tours).upper()
+            logger.info(f"Datos recopilados para {tours_str} desde {args.start_year} hasta {args.end_year}")
+            logger.info("Los datos se han guardado en el directorio 'data/processed/'")
+            logger.info("Para más detalles, consulta los archivos de resumen en ese directorio")
+            
+        except Exception as e:
+            logger.error(f"Error durante la recopilación de datos: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return 1
+        
+        return 0
+
+if __name__ == "__main__":
+        sys.exit(main())
