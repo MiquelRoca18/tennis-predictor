@@ -10,7 +10,6 @@ Proporciona funcionalidades para:
 from .reporting import (
     EloReportGenerator,
     TextReportGenerator,
-    get_elo_statistics_summary,
     generate_tournament_performance_report,
     generate_surface_comparison_report
 )
@@ -26,7 +25,6 @@ __all__ = [
     # Reporting
     'EloReportGenerator',
     'TextReportGenerator',
-    'get_elo_statistics_summary',
     'generate_tournament_performance_report',
     'generate_surface_comparison_report',
     

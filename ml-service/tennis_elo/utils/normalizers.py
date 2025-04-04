@@ -324,3 +324,11 @@ class TennisDataNormalizer:
                         break
         
         return normalized_df
+
+# Crear una instancia global para usar directamente
+_normalizer = TennisDataNormalizer()
+
+# Exportar funciones para fácil acceso
+normalize_surface = _normalizer.normalize_surface
+normalize_tournament_level = _normalizer.normalize_tournament_level
+normalize_round = _normalizer.normalize_round

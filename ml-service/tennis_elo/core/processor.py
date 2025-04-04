@@ -17,10 +17,10 @@ from pathlib import Path
 import traceback
 from tqdm import tqdm
 
-from tennis_elo.core.ratings import RatingCalculator
-from tennis_elo.core.match_analysis import MatchAnalyzer
-from tennis_elo.core.player_stats import PlayerStatsManager
-from tennis_elo.utils.normalizers import normalize_surface, normalize_tournament_level
+from .ratings import RatingCalculator
+from .match_analysis import MatchAnalyzer
+from .player_stats import PlayerStatsManager
+from ..utils.normalizers import normalize_surface, normalize_tournament_level
 
 # Configurar logging
 logger = logging.getLogger(__name__)

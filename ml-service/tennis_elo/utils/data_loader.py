@@ -64,6 +64,32 @@ class TennisDataLoader:
         
         for tour in tours:
             tour_lower = tour.lower()
+        
+            # Construir patrón de nombre de archivo según parámetros
+            if match_type == 'all':
+                patterns = [f"{tour_lower}_matches_{year}*.csv" for year in range(year_range[0], year_range[1] + 1)]
+                patterns.append(f"{tour_lower}_matches_{year_range[0]}_{year_range[1]}.csv")
+                patterns.append(f"{tour_lower}_matches_main_{year_range[0]}_{year_range[1]}.csv")
+            else:
+                patterns = [
+                    f"{tour_lower}_matches_{match_type}_{year_range[0]}_{year_range[1]}.csv",
+                    f"{tour_lower}_matches_{match_type}*.csv"
+                ]
+            
+            logger.info(f"Buscando patrones de archivo para {tour_lower}: {patterns}")
+            
+            # Buscar archivos que coincidan con patrones
+            for pattern in patterns:
+                search_paths = [
+                    self.data_dir / tour_lower / pattern,
+                    self.data_dir / pattern
+                ]
+                
+                for search_path in search_paths:
+                    logger.info(f"Buscando en: {search_path}")
+                    matched_files = list(self.data_dir.glob(str(search_path)))
+                    logger.info(f"Archivos encontrados: {matched_files}")
+
             players_path = self.data_dir / tour_lower / f"{tour_lower}_players.csv"
             
             if players_path.exists():

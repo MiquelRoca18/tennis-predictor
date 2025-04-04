@@ -24,19 +24,21 @@ import argparse
 import logging
 import sys
 import traceback
+import os
+import pandas as pd
 from datetime import datetime
 from pathlib import Path
+
 
 # Internal imports from the package
 from tennis_elo.core.processor import EnhancedTennisEloProcessor
 from tennis_elo.core.ratings import RatingCalculator
-from tennis_elo.utils.data_loader import DataLoader
-from tennis_elo.utils.error_tracking import setup_error_tracking, log_error
-from tennis_elo.analytics.evaluation import EloEvaluator
+from tennis_elo.utils.data_loader import TennisDataLoader as DataLoader
+from tennis_elo.utils.error_tracking import clear_error_history as setup_error_tracking, save_error_report as log_error
+from tennis_elo.analytics.evaluation import evaluate_predictive_power as EloEvaluator
 from tennis_elo.visualization import distribution_plots, evolution_plots, player_comparison
 from tennis_elo.io.persistence import EloDataManager
-from tennis_elo.io.reporting import ReportGenerator
-
+from tennis_elo.io.reporting import EloReportGenerator as ReportGenerator
 
 def setup_logging(verbose=False):
     """Configure logging based on verbosity level."""
@@ -103,34 +105,71 @@ def calculate_ratings(args, logger, data_path, output_path):
     logger.info("Starting ELO rating calculation...")
     
     try:
-        # Load data
+        # Load data usando exactamente los parámetros que coinciden con tus archivos
         data_loader = DataLoader(data_dir=str(data_path))
-        matches = data_loader.load_matches(
-            start_date=args.start_date,
-            end_date=args.end_date,
-            surface=args.surface,
-            tournament_level=args.tournament_level
+        matches = data_loader.load_matches_data(
+            tours=['atp', 'wta'],
+            year_range=(2000, 2024),  # Asegúrate de que coincida con tus archivos
+            match_type='main'  # Asegúrate de que coincida con tus archivos
         )
         
         logger.info(f"Loaded {len(matches)} matches for processing")
+
+        # Usar rutas exactas para depuración
+        logger.info(f"Buscando archivos en: {data_path}")
+        atp_file = os.path.join(data_path, "atp", "atp_matches_main_2000_2024.csv")
+        wta_file = os.path.join(data_path, "wta", "wta_matches_main_2000_2024.csv")
+        
+        logger.info(f"¿Existe archivo ATP? {os.path.exists(atp_file)}")
+        logger.info(f"¿Existe archivo WTA? {os.path.exists(wta_file)}")
+        
+        # Cargar archivos directamente
+        matches_dfs = []
+        
+        if os.path.exists(atp_file):
+            atp_df = pd.read_csv(atp_file)
+            logger.info(f"Cargado archivo ATP: {len(atp_df)} partidos")
+            matches_dfs.append(atp_df)
+        
+        if os.path.exists(wta_file):
+            wta_df = pd.read_csv(wta_file)
+            logger.info(f"Cargado archivo WTA: {len(wta_df)} partidos")
+            matches_dfs.append(wta_df)
+        
+        # Combinar dataframes
+        if matches_dfs:
+            matches = pd.concat(matches_dfs, ignore_index=True)
+            logger.info(f"Total de partidos combinados: {len(matches)}")
+        else:
+            matches = pd.DataFrame()
+            logger.warning("No se pudieron cargar archivos de partidos")
         
         # Initialize processor
         processor = EnhancedTennisEloProcessor()
         
         # Process matches and calculate ratings
-        ratings = processor.process_matches(matches)
+        if not matches.empty:
+            processed_df = processor.process_matches_dataframe(matches)
+            logger.info(f"Procesados {len(processed_df)} partidos")
+        else:
+            logger.warning("No hay partidos para procesar")
         
         # Save results
-        data_manager = EloDataManager(output_dir=str(output_path))
-        data_manager.save_ratings(ratings)
+        data_manager = EloDataManager(data_dir=str(output_path))
+        data_manager.save_ratings(
+            processor.player_ratings,
+            processor.player_ratings_by_surface,
+            processor.player_match_count,
+            processor.player_match_count_by_surface,
+            processor.player_rating_uncertainty
+        )
         
-        logger.info(f"Successfully calculated ratings for {len(ratings)} players")
-        return ratings
+        logger.info(f"Successfully calculated ratings for {len(processor.player_ratings)} players")
+        return processor.player_ratings
     
     except Exception as e:
-        log_error(e, "Error during rating calculation")
+        logger.error(f"Error during rating calculation: {str(e)}")
         raise
-
 
 def predict_matches(args, logger, data_path, output_path):
     """Predict outcomes of upcoming matches."""
@@ -142,7 +181,7 @@ def predict_matches(args, logger, data_path, output_path):
         upcoming_matches = data_loader.load_upcoming_matches()
         
         # Load existing ratings
-        data_manager = EloDataManager(output_dir=str(output_path))
+        data_manager = EloDataManager(data_dir=str(output_path))
         ratings = data_manager.load_latest_ratings()
         
         # Initialize rating calculator
@@ -189,7 +228,7 @@ def evaluate_performance(args, logger, data_path, output_path):
         )
         
         # Load predictions if available, or generate them
-        data_manager = EloDataManager(output_dir=str(output_path))
+        data_manager = EloDataManager(data_dir=str(output_path))
         try:
             predictions = data_manager.load_predictions()
         except FileNotFoundError:
@@ -223,7 +262,7 @@ def generate_visuals(args, logger, data_path, output_path):
     
     try:
         # Load ratings
-        data_manager = EloDataManager(output_dir=str(output_path))
+        data_manager = EloDataManager(data_dir=str(output_path))
         ratings = data_manager.load_latest_ratings()
         rating_history = data_manager.load_rating_history()
         
@@ -263,7 +302,7 @@ def export_reports(args, logger, data_path, output_path):
     
     try:
         # Load data
-        data_manager = EloDataManager(output_dir=str(output_path))
+        data_manager = EloDataManager(data_dir=str(output_path))
         ratings = data_manager.load_latest_ratings()
         
         # Initialize report generator
