@@ -113,11 +113,14 @@ def apply_tracers(class_obj: Any, methods_to_trace: List[str]) -> None:
             wrapped_method = trace_errors(original_method)
             setattr(class_obj, method_name, wrapped_method)
 
-def save_error_report(output_dir: Optional[str] = None) -> str:
+# Modifica la función log_error en utils/error_tracking.py
+def save_error_report(e, error_context=None, output_dir: Optional[str] = None) -> str:
     """
-    Guarda un informe detallado de los errores encontrados durante la ejecución.
+    Guarda un informe detallado de un error específico.
     
     Args:
+        e: La excepción
+        error_context: Contexto del error (opcional)
         output_dir: Directorio donde guardar el informe (opcional)
         
     Returns:
@@ -133,31 +136,18 @@ def save_error_report(output_dir: Optional[str] = None) -> str:
         report_file = f"error_report_{timestamp}.txt"
     
     with open(report_file, 'w') as f:
-        f.write("=== INFORME DE ERRORES EN TENNIS ELO PROCESSOR ===\n")
+        f.write("=== INFORME DE ERROR EN TENNIS ELO PROCESSOR ===\n")
         f.write(f"Generado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         
-        if not function_errors:
-            f.write("¡No se encontraron errores!\n")
-            return report_file
-            
-        f.write("=== RESUMEN DE ERRORES POR FUNCIÓN ===\n")
-        for func_name, errors in sorted(function_errors.items(), key=lambda x: len(x[1]), reverse=True):
-            f.write(f"{func_name}: {len(errors)} errores\n")
+        if error_context:
+            f.write(f"Contexto: {error_context}\n\n")
         
-        f.write("\n=== ERRORES DETALLADOS ===\n\n")
-        for i, error in enumerate(error_locations, 1):
-            f.write(f"ERROR #{i}\n")
-            f.write(f"Función: {error['function']}\n")
-            f.write(f"Tipo de excepción: {error['exception_type']}\n")
-            f.write(f"Mensaje: {error['exception']}\n")
-            f.write(f"Línea: {error['line']}\n")
-            f.write(f"Código: {error['text']}\n")
-            f.write(f"Timestamp: {error['timestamp']}\n")
-            f.write("\nTraceback:\n")
-            f.write(error['traceback'])
-            f.write("\n" + "-"*50 + "\n\n")
+        f.write(f"Tipo de error: {type(e).__name__}\n")
+        f.write(f"Mensaje: {str(e)}\n\n")
+        f.write("Traceback:\n")
+        f.write(traceback.format_exc())
     
-    logger.info(f"Informe de errores guardado en {report_file}")
+    logger.info(f"Informe de error guardado en {report_file}")
     return report_file
 
 def clear_error_history() -> None:

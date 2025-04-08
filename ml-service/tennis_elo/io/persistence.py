@@ -54,7 +54,8 @@ class EloDataManager:
                     player_form: Optional[Dict[str, Any]] = None,
                     h2h_records: Optional[Dict] = None,
                     output_dir: Optional[str] = None,
-                    timestamp: Optional[str] = None) -> Dict[str, str]:
+                    timestamp: Optional[str] = None,
+                    tournament_level: str = 'all') -> Dict[str, str]:
         """
         Guarda los ratings ELO de jugadores y datos relacionados.
         
@@ -68,6 +69,7 @@ class EloDataManager:
             h2h_records: Historial head-to-head entre jugadores (opcional)
             output_dir: Directorio de salida personalizado (opcional)
             timestamp: Marca de tiempo para los archivos (opcional)
+            tournament_level: Nivel de torneo usado para generar estos ratings (por defecto 'all')
             
         Returns:
             Diccionario con rutas de los archivos guardados
@@ -86,8 +88,11 @@ class EloDataManager:
         # Rutas de archivos a guardar
         file_paths = {}
         
+        # Incluir nivel de torneo en los nombres de archivo
+        level_suffix = f"_{tournament_level}" if tournament_level != 'all' else ""
+        
         # 1. Guardar ratings generales
-        general_path = output_path / f'elo_ratings_general_{timestamp}.json'
+        general_path = output_path / f'elo_ratings_general{level_suffix}_{timestamp}.json'
         try:
             with open(general_path, 'w', encoding='utf-8') as f:
                 json.dump(player_ratings, f, indent=2, default=self._json_serializer)
@@ -97,7 +102,7 @@ class EloDataManager:
             logger.error(f"Error guardando ratings generales: {str(e)}")
         
         # 2. Guardar ratings por superficie
-        surface_path = output_path / f'elo_ratings_by_surface_{timestamp}.json'
+        surface_path = output_path / f'elo_ratings_by_surface{level_suffix}_{timestamp}.json'
         try:
             with open(surface_path, 'w', encoding='utf-8') as f:
                 json.dump(player_ratings_by_surface, f, indent=2, default=self._json_serializer)
@@ -107,7 +112,7 @@ class EloDataManager:
             logger.error(f"Error guardando ratings por superficie: {str(e)}")
         
         # 3. Guardar contadores de partidos
-        counts_path = output_path / f'player_match_counts_{timestamp}.json'
+        counts_path = output_path / f'player_match_counts{level_suffix}_{timestamp}.json'
         try:
             with open(counts_path, 'w', encoding='utf-8') as f:
                 json.dump(player_match_count, f, indent=2, default=self._json_serializer)
@@ -117,7 +122,7 @@ class EloDataManager:
             logger.error(f"Error guardando contadores de partidos: {str(e)}")
         
         # 4. Guardar contadores por superficie
-        counts_surface_path = output_path / f'player_match_counts_by_surface_{timestamp}.json'
+        counts_surface_path = output_path / f'player_match_counts_by_surface{level_suffix}_{timestamp}.json'
         try:
             with open(counts_surface_path, 'w', encoding='utf-8') as f:
                 json.dump(player_match_count_by_surface, f, indent=2, default=self._json_serializer)
@@ -128,7 +133,7 @@ class EloDataManager:
         
         # 5. Guardar incertidumbres si están disponibles
         if player_uncertainty:
-            uncertainty_path = output_path / f'player_rating_uncertainty_{timestamp}.json'
+            uncertainty_path = output_path / f'player_rating_uncertainty{level_suffix}_{timestamp}.json'
             try:
                 with open(uncertainty_path, 'w', encoding='utf-8') as f:
                     json.dump(player_uncertainty, f, indent=2, default=self._json_serializer)
@@ -139,7 +144,7 @@ class EloDataManager:
         
         # 6. Guardar forma reciente si está disponible
         if player_form:
-            form_path = output_path / f'player_form_{timestamp}.json'
+            form_path = output_path / f'player_form{level_suffix}_{timestamp}.json'
             try:
                 with open(form_path, 'w', encoding='utf-8') as f:
                     json.dump(player_form, f, indent=2, default=self._json_serializer)
@@ -150,7 +155,7 @@ class EloDataManager:
         
         # 7. Guardar historial head-to-head si está disponible
         if h2h_records:
-            h2h_path = output_path / f'head_to_head_records_{timestamp}.json'
+            h2h_path = output_path / f'head_to_head_records{level_suffix}_{timestamp}.json'
             try:
                 # Convertir defaultdict anidado a dict regular para JSON
                 h2h_dict = {}
@@ -169,10 +174,11 @@ class EloDataManager:
                 logger.error(f"Error guardando historial head-to-head: {str(e)}")
         
         # 8. Guardar archivo de índice con referencias a todos los archivos
-        index_path = output_path / f'ratings_index_{timestamp}.json'
+        index_path = output_path / f'ratings_index{level_suffix}_{timestamp}.json'
         try:
             index_data = {
                 'timestamp': timestamp,
+                'tournament_level': tournament_level,
                 'files': file_paths,
                 'total_players': len(player_ratings),
                 'total_matches': sum(player_match_count.values()),
@@ -183,7 +189,8 @@ class EloDataManager:
                 json.dump(index_data, f, indent=2)
             
             # También guardar un archivo de índice "latest" para referencia rápida
-            latest_index_path = output_path / 'ratings_latest_index.json'
+            # Incluir nivel de torneo en el nombre del archivo latest
+            latest_index_path = output_path / f'ratings_latest_index{level_suffix}.json'
             with open(latest_index_path, 'w', encoding='utf-8') as f:
                 json.dump(index_data, f, indent=2)
             

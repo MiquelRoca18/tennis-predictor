@@ -15,7 +15,8 @@ parser.add_argument('--data-dir', help='Directory containing input data files')
 parser.add_argument('--output-dir', help='Directory for output files')
 parser.add_argument('--start-date', help='Start date for analysis (YYYY-MM-DD)')
 parser.add_argument('--end-date', help='End date for analysis (YYYY-MM-DD)')
-parser.add_argument('--tournament-level', help='Tournament level to analyze')
+parser.add_argument('--tournament-level', help='Tournament level to analyze',
+                   choices=['grand_slam', 'atp1000', 'atp500', 'atp250', 'challenger', 'futures', 'all'])
 parser.add_argument('--verbose', action='store_true', help='Enable verbose output')
 
 args = parser.parse_args()
